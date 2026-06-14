@@ -2,6 +2,9 @@ from mas_framework.utils.globals import Cost, PromptTokens, CompletionTokens
 import os
 import tiktoken
 
+_TOKENIZER_CACHE = {}
+_TOKENIZER_WARNED = set()
+
 
 def _float_env(name: str, default: float) -> float:
     value = os.getenv(name)
@@ -12,7 +15,47 @@ def _float_env(name: str, default: float) -> float:
     except ValueError:
         return default
 
-def cal_token(model: str, text: str):
+
+def _is_qwen_model(model: str) -> bool:
+    return "qwen" in str(model).lower()
+
+
+def _qwen_tokenizer_path() -> str:
+    return (
+        os.getenv("QWEN_TOKENIZER_PATH")
+        or os.getenv("LOCAL_TOKENIZER_PATH")
+        or "/data/lyz/models/Qwen3-8B"
+    )
+
+
+def _load_local_tokenizer(path: str):
+    if not path:
+        return None
+    if path in _TOKENIZER_CACHE:
+        return _TOKENIZER_CACHE[path]
+
+    try:
+        from transformers import AutoTokenizer
+
+        local_only = os.getenv("ALLOW_REMOTE_TOKENIZER", "0") != "1"
+        tokenizer = AutoTokenizer.from_pretrained(
+            path,
+            trust_remote_code=True,
+            local_files_only=local_only,
+        )
+        _TOKENIZER_CACHE[path] = tokenizer
+        return tokenizer
+    except Exception as exc:
+        if path not in _TOKENIZER_WARNED:
+            print(
+                f"Warning: failed to load tokenizer from {path!r}: {exc}. "
+                "Falling back to tiktoken estimate."
+            )
+            _TOKENIZER_WARNED.add(path)
+        _TOKENIZER_CACHE[path] = None
+        return None
+
+def _cal_token_tiktoken_estimate(model: str, text: str):
     # Qwen 同样可以使用 tiktoken 的 cl100k_base 词表进行近似 token 估算
     # 如果遇到编码错误，降级使用 gpt-3.5-turbo 的编码器
     try:
@@ -107,6 +150,16 @@ def cost_count_from_usage(prompt_tokens: int, completion_tokens: int, model_name
     CompletionTokens.instance().value += completion_tokens
 
     return price, prompt_tokens, completion_tokens
+
+
+def cal_token(model: str, text: str):
+    text = "" if text is None else str(text)
+    if _is_qwen_model(model):
+        tokenizer = _load_local_tokenizer(_qwen_tokenizer_path())
+        if tokenizer is not None:
+            return len(tokenizer.encode(text, add_special_tokens=False))
+
+    return _cal_token_tiktoken_estimate(model, text)
 
 
 OPENAI_MODEL_INFO = {
@@ -259,3 +312,12 @@ OPENAI_MODEL_INFO = {
         }
     }
 }
+
+OPENAI_MODEL_INFO["qwen"].update({
+    "/data/lyz/models/Qwen3-8B": {
+        "context window": 32768,
+        "training": "2024",
+        "input": _float_env("LOCAL_MODEL_INPUT_COST_PER_1K", 0.0),
+        "output": _float_env("LOCAL_MODEL_OUTPUT_COST_PER_1K", 0.0),
+    }
+})
