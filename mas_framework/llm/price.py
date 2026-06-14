@@ -1,5 +1,16 @@
 from mas_framework.utils.globals import Cost, PromptTokens, CompletionTokens
+import os
 import tiktoken
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 def cal_token(model: str, text: str):
     # Qwen 同样可以使用 tiktoken 的 cl100k_base 词表进行近似 token 估算
@@ -37,7 +48,10 @@ def cost_count(prompt, response, model_name):
             price = prompt_len * OPENAI_MODEL_INFO[branch][model_name]["input"] / 1000 + \
                     completion_len * OPENAI_MODEL_INFO[branch][model_name]["output"] / 1000
         else:
-            price = 0.0
+            price = (
+                prompt_len * _float_env("LOCAL_MODEL_INPUT_COST_PER_1K", 0.0) / 1000
+                + completion_len * _float_env("LOCAL_MODEL_OUTPUT_COST_PER_1K", 0.0) / 1000
+            )
     elif "dall-e" in model_name_lower:
         branch = "dall-e"
         prompt_len = 0
@@ -78,7 +92,10 @@ def cost_count_from_usage(prompt_tokens: int, completion_tokens: int, model_name
             price = (prompt_tokens * OPENAI_MODEL_INFO[branch][model_name]["input"] / 1000 +
                      completion_tokens * OPENAI_MODEL_INFO[branch][model_name]["output"] / 1000)
         else:
-            print(f"Warning: Model {model_name} not found in pricing info. Cost set to 0.")
+            price = (
+                prompt_tokens * _float_env("LOCAL_MODEL_INPUT_COST_PER_1K", 0.0) / 1000
+                + completion_tokens * _float_env("LOCAL_MODEL_OUTPUT_COST_PER_1K", 0.0) / 1000
+            )
     elif "dall-e" in model_name_lower:
         prompt_tokens = 0
         completion_tokens = 0
@@ -95,19 +112,20 @@ def cost_count_from_usage(prompt_tokens: int, completion_tokens: int, model_name
 OPENAI_MODEL_INFO = {
     "qwen": {
         "current_recommended": "qwen3-8b",
-        # 本地部署的模型，实际费用设为 0。
-        # 如果你未来使用阿里云百炼官方 API，可修改为对应美元换算（如 0.0003/0.0012 等）
+        # Local deployment defaults to zero dollar cost. Set
+        # LOCAL_MODEL_INPUT_COST_PER_1K and LOCAL_MODEL_OUTPUT_COST_PER_1K to track
+        # estimated local serving cost.
         "qwen3-8b": {
             "context window": 32768,
             "training": "2024",
-            "input": 0.000,
-            "output": 0.000
+            "input": _float_env("LOCAL_MODEL_INPUT_COST_PER_1K", 0.0),
+            "output": _float_env("LOCAL_MODEL_OUTPUT_COST_PER_1K", 0.0)
         },
         "/Models/Qwen3-8B": {  # 适配实验脚本中直接传入本地路径作为 model_name 的情况
             "context window": 32768,
             "training": "2024",
-            "input": 0.000,
-            "output": 0.000
+            "input": _float_env("LOCAL_MODEL_INPUT_COST_PER_1K", 0.0),
+            "output": _float_env("LOCAL_MODEL_OUTPUT_COST_PER_1K", 0.0)
         }
     },
     "gpt-4": {
