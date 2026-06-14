@@ -29,6 +29,7 @@ from mas_framework.utils.globals import CompletionTokens, Cost, PromptTokens
 
 T = TypeVar("T")
 EPS = 1e-8
+PROB_EPS = 1e-6
 
 DEFAULT_JUDGE_TIMEOUT = 120.0
 DEFAULT_JUDGE_CONNECT_TIMEOUT = 10.0
@@ -354,6 +355,8 @@ def scale_edge_rewards(
         return {}
 
     rewards = torch.tensor(list(edge_rewards.values()), dtype=torch.float32)
+    if not torch.isfinite(rewards).all():
+        raise ValueError(f"Non-finite edge rewards: {edge_rewards}")
     abs_rewards = rewards.abs()
     scale = abs_rewards.std(unbiased=False)
     if float(scale) < EPS:
@@ -372,11 +375,14 @@ def scale_edge_rewards(
 
 
 def bernoulli_kl(current_prob: torch.Tensor, ref_prob: torch.Tensor) -> torch.Tensor:
-    p = current_prob.clamp(EPS, 1 - EPS)
-    q = ref_prob.detach().clamp(EPS, 1 - EPS)
-    return p * (p.log() - q.log()) + (1 - p) * (
+    p = current_prob.clamp(PROB_EPS, 1 - PROB_EPS)
+    q = ref_prob.detach().clamp(PROB_EPS, 1 - PROB_EPS)
+    kl = p * (p.log() - q.log()) + (1 - p) * (
         (1 - p).log() - (1 - q).log()
     )
+    if not torch.isfinite(kl).all():
+        raise ValueError(f"Non-finite Bernoulli KL: p={p}, q={q}, kl={kl}")
+    return kl
 
 
 async def edge_entropy_rewards(
@@ -708,7 +714,7 @@ def sample_graph_with_edge_trace(
                         ref_edge_input = ref_model.edge_project(ref_edge_input)
             edge_out, h_edge = model.edge_gru(edge_input, h_edge)
             edge_pred = model.output_edge(edge_out).view(1, model.len_edge_vec)
-            edge_prob = edge_pred[:, has_edge_token].clamp(EPS, 1 - EPS)
+            edge_prob = edge_pred[:, has_edge_token].clamp(PROB_EPS, 1 - PROB_EPS)
             if use_ref_model:
                 with torch.no_grad():
                     ref_edge_out, ref_h_edge = ref_model.edge_gru(
@@ -720,14 +726,14 @@ def sample_graph_with_edge_trace(
                         ref_model.len_edge_vec,
                     )
                     ref_edge_prob = ref_edge_pred[:, has_edge_token].clamp(
-                        EPS,
-                        1 - EPS,
+                        PROB_EPS,
+                        1 - PROB_EPS,
                     )
                 edge_kls.append(
                     bernoulli_kl(edge_prob.view(()), ref_edge_prob.to(device).view(()))
                 )
             sample_prob = (1 - edge_epsilon) * edge_prob + edge_epsilon * 0.5
-            sample_prob = sample_prob.clamp(EPS, 1 - EPS)
+            sample_prob = sample_prob.clamp(PROB_EPS, 1 - PROB_EPS)
             dist = torch.distributions.Bernoulli(probs=sample_prob)
             exists = dist.sample()
             log_prob = dist.log_prob(exists).view(())
