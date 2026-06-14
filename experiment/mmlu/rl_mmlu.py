@@ -911,14 +911,48 @@ def infinite_loader(dataset, limit_questions: Optional[int]) -> Iterator[Any]:
             yield dataset[idx]
 
 
+def _checkpoint_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, torch.device):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _checkpoint_safe_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_checkpoint_safe_value(item) for item in value]
+    if hasattr(value, "__dict__") and not callable(value):
+        return _checkpoint_safe_value(vars(value))
+    return str(value)
+
+
+def _checkpoint_safe_dict(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        raw = value
+    elif hasattr(value, "__dict__"):
+        raw = vars(value)
+    else:
+        return {}
+    return {
+        str(key): _checkpoint_safe_value(item)
+        for key, item in raw.items()
+    }
+
+
 def save_rl_checkpoint(model, output_dir: str, args, name: str):
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, name)
     torch.save({
         "model_state_dict": model.state_dict(),
         "data_statistics": model.data_statistics,
-        "args": model.args.__dict__,
-        "rl_args": vars(args),
+        "args": _checkpoint_safe_dict(model.args),
+        "rl_args": _checkpoint_safe_dict(args),
     }, path)
     return path
 
@@ -1178,6 +1212,14 @@ async def train_rl(args):
         }
         with open(metrics_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(metric, ensure_ascii=False, default=str) + "\n")
+
+        print(
+            f"Iter {iteration + 1}/{args.num_iterations}: "
+            f"loss={loss_value:.4f} correct_rate={correct_rate:.3f} "
+            f"avg_edges={avg_edges:.2f} "
+            f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
+            f"time={time.time() - start_ts:.1f}s"
+        )
 
         if correct_rate > best_correct_rate:
             best_correct_rate = correct_rate

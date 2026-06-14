@@ -366,6 +366,14 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
         with open(metrics_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(metric, ensure_ascii=False, default=str) + "\n")
 
+        print(
+            f"{spec.name} Iter {iteration + 1}/{args.num_iterations}: "
+            f"loss={loss_value:.4f} correct_rate={correct_rate:.3f} "
+            f"avg_edges={avg_edges:.2f} "
+            f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
+            f"time={time.time() - start_ts:.1f}s"
+        )
+
         if correct_rate > best_correct_rate:
             best_correct_rate = correct_rate
             save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
