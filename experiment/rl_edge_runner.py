@@ -237,22 +237,19 @@ async def evaluate_current_generator(model, sentence_model, spec: RLDatasetSpec,
                 )
                 correct += int(result["is_correct"])
                 edge_counts.append(result["num_edges"])
-            except Exception as exc:
-                print(f"[{spec.name} eval iter {iteration}] sample failed: {exc}")
+            except Exception:
+                pass
 
     cost = Cost.instance().value - start_cost
     prompt_tokens = PromptTokens.instance().value - start_prompt
     completion_tokens = CompletionTokens.instance().value - start_completion
-    avg_edges = sum(edge_counts) / max(1, len(edge_counts))
     accuracy = correct / max(1, total)
     print(
         f"[{spec.name} eval iter {iteration}] "
         f"accuracy={accuracy:.3f} ({correct}/{total}) "
-        f"avg_edges={avg_edges:.2f} "
         f"cost=${cost:.6f} "
         f"prompt_tokens={int(prompt_tokens)} "
-        f"completion_tokens={int(completion_tokens)} "
-        f"time={time.time() - start_ts:.1f}s"
+        f"completion_tokens={int(completion_tokens)}"
     )
     model.train()
 
@@ -321,11 +318,7 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
                         train_mode=True,
                         ref_model=ref_model,
                     )
-                except Exception as exc:
-                    print(
-                        f"[{spec.name} iter {iteration + 1} item {batch_idx + 1} "
-                        f"sample {sample_idx + 1}/{samples_per_prompt}] failed: {exc}"
-                    )
+                except Exception:
                     continue
 
                 if result["loss"].requires_grad:
@@ -343,15 +336,6 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
                     "scaled_edge_rewards": result["scaled_edge_rewards"],
                     "edge_details": result["edge_details"],
                 })
-                print(
-                    f"[{spec.name} iter {iteration + 1} item {batch_idx + 1} "
-                    f"sample {sample_idx + 1}/{samples_per_prompt}] "
-                    f"correct={result['is_correct']} edges={result['num_edges']}"
-                )
-                if result["edge_rewards"]:
-                    print(f"  edge rewards: {result['edge_rewards']}")
-                    print(f"  scaled edge rewards: {result['scaled_edge_rewards']}")
-
         if losses:
             total_loss = torch.stack(losses).mean()
             optimizer.zero_grad()
@@ -382,32 +366,20 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
         with open(metrics_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(metric, ensure_ascii=False, default=str) + "\n")
 
-        print(
-            f"{spec.name} Iter {iteration + 1}/{args.num_iterations}: "
-            f"loss={loss_value:.4f} correct_rate={correct_rate:.3f} "
-            f"avg_edges={avg_edges:.2f} "
-            f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
-            f"time={time.time() - start_ts:.1f}s"
-        )
-
         if correct_rate > best_correct_rate:
             best_correct_rate = correct_rate
-            path = save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
+            save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
             save_rl_checkpoint(model, args.output_dir, args, "rl_best_model.pth")
-            print(f"Saved best RL checkpoint to {path}")
 
         if args.save_every > 0 and (iteration + 1) % args.save_every == 0:
-            path = save_rl_checkpoint(model, args.output_dir, args, f"rl_iter_{iteration + 1}.pth")
-            print(f"Saved periodic RL checkpoint to {path}")
+            save_rl_checkpoint(model, args.output_dir, args, f"rl_iter_{iteration + 1}.pth")
 
         if args.eval_every > 0 and (iteration + 1) % args.eval_every == 0:
             await evaluate_current_generator(
                 model, sentence_model, spec, args, eval_records, iteration + 1
             )
 
-    final_path = save_rl_checkpoint(model, args.output_dir, args, "rl_final_model.pth")
-    print(f"{spec.name} edge RL stage complete. Final checkpoint: {final_path}")
-    print(f"Metrics: {metrics_path}")
+    save_rl_checkpoint(model, args.output_dir, args, "rl_final_model.pth")
 
 
 def run_spec(spec: RLDatasetSpec):

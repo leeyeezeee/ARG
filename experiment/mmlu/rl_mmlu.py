@@ -858,8 +858,8 @@ async def execute_graph_with_history(
                         timeout=max_time,
                     )
                     break
-                except Exception as exc:
-                    print(f"Error during execution of node {current_node_id}: {exc}")
+                except Exception:
+                    pass
                 tries += 1
             for successor in graph.nodes[current_node_id].spatial_successors:
                 if successor.id not in graph.nodes:
@@ -977,8 +977,7 @@ async def evaluate_current_generator(
             try:
                 raw_answer = await test_graph.arun(input_dict, args.num_rounds)
                 answer = dataset.postprocess_answer(raw_answer)
-            except Exception as exc:
-                print(f"[eval iter {iteration}] sample {idx} failed: {exc}")
+            except Exception:
                 answer = ""
 
             if answer == correct_answer:
@@ -988,16 +987,12 @@ async def evaluate_current_generator(
     eval_prompt_tokens = PromptTokens.instance().value - start_prompt_tokens
     eval_completion_tokens = CompletionTokens.instance().value - start_completion_tokens
     accuracy = correct_count / max(1, total)
-    avg_edges = sum(edge_counts) / max(1, len(edge_counts))
-
     print(
         f"[eval iter {iteration}] "
         f"accuracy={accuracy:.3f} ({correct_count}/{total}) "
-        f"avg_edges={avg_edges:.2f} "
         f"cost=${eval_cost:.6f} "
         f"prompt_tokens={int(eval_prompt_tokens)} "
-        f"completion_tokens={int(eval_completion_tokens)} "
-        f"time={time.time() - start_ts:.1f}s"
+        f"completion_tokens={int(eval_completion_tokens)}"
     )
     model.train()
 
@@ -1095,11 +1090,7 @@ async def train_rl(args):
                         num_entropy_samples,
                     )
                     answer = dataset.postprocess_answer(raw_answer)
-                except Exception as exc:
-                    print(
-                        f"Execution failed for batch item {batch_idx} "
-                        f"sample {sample_idx + 1}/{samples_per_prompt}: {exc}"
-                    )
+                except Exception:
                     answer = ""
 
                 is_correct = answer == correct_answer
@@ -1158,19 +1149,6 @@ async def train_rl(args):
                     "edge_details": edge_details,
                     "num_edges": generated_graph.number_of_edges(),
                 })
-                print(
-                    f"[iter {iteration + 1} item {batch_idx + 1} "
-                    f"sample {sample_idx + 1}/{samples_per_prompt}] "
-                    f"correct={is_correct} edges={generated_graph.number_of_edges()} "
-                    f"answer={answer!r} target={correct_answer!r}"
-                )
-                if edge_rewards:
-                    print(f"  edge rewards: {edge_rewards}")
-                    print(
-                        "  scaled edge rewards: "
-                        f"{scale_edge_rewards(edge_rewards, args.edge_reward_clip)}"
-                    )
-
         if losses:
             total_loss = torch.stack(losses).mean()
             optimizer.zero_grad()
@@ -1201,28 +1179,18 @@ async def train_rl(args):
         with open(metrics_path, "a", encoding="utf-8") as file:
             file.write(json.dumps(metric, ensure_ascii=False, default=str) + "\n")
 
-        print(
-            f"Iter {iteration + 1}/{args.num_iterations}: "
-            f"loss={loss_value:.4f} correct_rate={correct_rate:.3f} "
-            f"avg_edges={avg_edges:.2f} "
-            f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
-            f"time={time.time() - start_ts:.1f}s"
-        )
-
         if correct_rate > best_correct_rate:
             best_correct_rate = correct_rate
-            path = save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
+            save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
             save_rl_checkpoint(model, args.output_dir, args, "rl_best_model.pth")
-            print(f"Saved best RL checkpoint to {path}")
 
         if args.save_every > 0 and (iteration + 1) % args.save_every == 0:
-            path = save_rl_checkpoint(
+            save_rl_checkpoint(
                 model,
                 args.output_dir,
                 args,
                 f"rl_iter_{iteration + 1}.pth",
             )
-            print(f"Saved periodic RL checkpoint to {path}")
 
         if args.eval_every > 0 and (iteration + 1) % args.eval_every == 0:
             await evaluate_current_generator(
@@ -1234,9 +1202,7 @@ async def train_rl(args):
                 iteration + 1,
             )
 
-    final_path = save_rl_checkpoint(model, args.output_dir, args, "rl_final_model.pth")
-    print(f"RL edge stage complete. Final checkpoint: {final_path}")
-    print(f"Metrics: {metrics_path}")
+    save_rl_checkpoint(model, args.output_dir, args, "rl_final_model.pth")
 
 
 if __name__ == "__main__":
