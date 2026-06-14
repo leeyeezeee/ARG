@@ -20,8 +20,8 @@ from mas_framework.utils.globals import Cost, PromptTokens, CompletionTokens
 from sentence_transformers import SentenceTransformer
 from mas_framework.graph.graph import TestGraph
 from experiment.utils import Accuracy, load_model, generate_graph, convert_to_pyg_graph
-from local_datasets.mmlu_dataset import MMLUDataset
-from local_datasets.MMLU.download import download
+from datasets.mmlu_dataset import MMLUDataset
+from datasets.MMLU.download import download
 
 
 def parse_args():
@@ -48,7 +48,7 @@ def parse_args():
                         help="evaluation batch size")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed")
-    parser.add_argument('--embedding_model', type=str, default="/Models/all-MiniLM-L6-v2",
+    parser.add_argument('--embedding_model', type=str, default="/data/lyz/models/all-MiniLM-L6-v2",
                         help="model for task embeddings")
     parser.add_argument('--summary_log_file', type=str, default='./res_logs/evaluation_summary.jsonl',
                         help="log file to record evaluation summaries")

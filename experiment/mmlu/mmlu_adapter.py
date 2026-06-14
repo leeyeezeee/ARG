@@ -12,7 +12,7 @@ from mmlu_prompt_set import ROLE_DESCRIPTION
 
 
 def get_sentence_embedding(sentence):
-    model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     embeddings = model.encode(sentence)
     return embeddings
 
@@ -21,7 +21,7 @@ def precompute_role_embeddings(save_path="./prompt/precomputed_role_embeddings.p
     """
     Precompute embeddings for roles defined in ROLE_DESCRIPTION.
     """
-    model = model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    model = model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_embeddings = {}
 
     for role, description in ROLE_DESCRIPTION.items():

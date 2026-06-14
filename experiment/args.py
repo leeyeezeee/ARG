@@ -58,7 +58,7 @@ class Args:
         args.time = '{0:%Y_%m_%d_%H_%M_%S}'.format(datetime.datetime.now())
         args.is_dag = True
         args.dir_input = 'output/'
-        args.dataset_path = '/local_datasets/'
+        args.dataset_path = '/datasets/'
         args.dataset_name = args.dataset
         if args.role_mapping_path is not None and os.path.exists(args.role_mapping_path):
             try:

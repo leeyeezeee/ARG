@@ -24,7 +24,7 @@ from sentence_transformers import SentenceTransformer
 from experiment import process_dataset as gdata
 from mas_framework.graph.graph import Graph, TestGraph
 from mas_framework.tools.reader.readers import JSONLReader
-from local_datasets.aqua_dataset import aqua_data_process, aqua_get_predict
+from datasets.aqua_dataset import aqua_data_process, aqua_get_predict
 from experiment.aqua.aqua_prompt_set import ROLE_DESCRIPTION
 
 FINETUNE_DATA_DIR = "../FinetuneData_Aqua"
@@ -168,7 +168,7 @@ async def generate_pruned_data(args, dataset_subset, model_path, output_dir):
     print("\n" + "=" * 20 + " Stage 2a: Aqua Pruned Data " + "=" * 20)
     model = load_model(model_path)
     model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_constraints_dict = ROLE_DESCRIPTION
 
     successful_efficient_graphs = 0
@@ -374,7 +374,7 @@ async def main():
     with open(TASK_SPLIT_FILE, 'r') as f:
         task_split = json.load(f)
 
-    full_dataset = aqua_data_process(JSONLReader.parse_file("../../local_datasets/AQuA/AQuA.jsonl"))
+    full_dataset = aqua_data_process(JSONLReader.parse_file("../../datasets/AQuA/AQuA.jsonl"))
     finetune_dataset_subset = [full_dataset[i] for i in task_split['finetune_tasks_indices']]
     print(f"\nLoaded {len(finetune_dataset_subset)} tasks (from training set) for Aqua finetune data generation.")
 

@@ -12,13 +12,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def get_sentence_embedding(sentence):
-    model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     embeddings = model.encode(sentence)
     return embeddings
 
 
 def precompute_role_embeddings(save_path):
-    model = model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    model = model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_embeddings = {}
     for role, description in ROLE_DESCRIPTION.items():
         role_with_desc = f"{role}: {description.strip()}"

@@ -168,7 +168,7 @@ def precompute_role_embeddings(dsets, save_path="./prompt/precomputed_role_embed
     """
     Precompute role embeddings for different datasets.
     """
-    model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_embeddings = {}
 
     if dsets == 'mmlu':

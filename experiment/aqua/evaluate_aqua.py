@@ -15,7 +15,7 @@ from sentence_transformers import SentenceTransformer
 from mas_framework.tools.reader.readers import JSONLReader
 from mas_framework.graph.graph import TestGraph
 from experiment.utils import load_model, generate_graph, convert_to_pyg_graph
-from local_datasets.aqua_dataset import aqua_data_process, aqua_get_predict
+from datasets.aqua_dataset import aqua_data_process, aqua_get_predict
 from finetune_aqua import setup_environment
 from aqua_prompt_set import ROLE_DESCRIPTION
 
@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument('--model_path', type=str,
                         default='output/xxxx',
                         help="Path to trained model directory")
-    parser.add_argument('--dataset_path', type=str, default='../../local_datasets/AQuA/AQuA.jsonl')
+    parser.add_argument('--dataset_path', type=str, default='../../datasets/AQuA/AQuA.jsonl')
     parser.add_argument('--task_split_path', type=str, default='./task_split_aqua.json')
     parser.add_argument('--llm_name', type=str, default="qwen3-8b")
     parser.add_argument('--decision_method', type=str, default="FinalRefer")
@@ -51,7 +51,7 @@ async def main(ef=True):
     else:
         args.model_name = 'best'
     simple_ar_model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_constraints_dict = ROLE_DESCRIPTION
 
     full_dataset_raw = JSONLReader.parse_file(args.dataset_path)

@@ -24,7 +24,7 @@ from sentence_transformers import SentenceTransformer
 from experiment import process_dataset as gdata
 from mas_framework.graph.graph import Graph, TestGraph
 from mas_framework.tools.reader.readers import JSONLReader, JSONReader
-from local_datasets.gsm8k_dataset import svamp_data_process, gsm_get_predict
+from datasets.gsm8k_dataset import svamp_data_process, gsm_get_predict
 from experiment.gsm8k.gsm8k_prompt_set import ROLE_DESCRIPTION
 
 FINETUNE_DATA_DIR = "../FinetuneData_svamp"
@@ -163,7 +163,7 @@ async def generate_pruned_data(args, ds, mp, od):
     print("\n" + "=" * 20 + " Stage 2a: SVAMP Pruned Data " + "=" * 20)
     model = load_model(mp)
     model.eval()
-    sm = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sm = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     roles = ROLE_DESCRIPTION
 
     count = 0
@@ -355,7 +355,7 @@ async def main():
     with open(TASK_SPLIT_FILE, 'r') as f:
         task_split = json.load(f)
     
-    full_dataset = svamp_data_process(JSONReader.parse_file("../../local_datasets/SVAMP/SVAMP.json"))
+    full_dataset = svamp_data_process(JSONReader.parse_file("../../datasets/SVAMP/SVAMP.json"))
     finetune_dataset_subset = [full_dataset[i] for i in task_split['finetune_tasks_indices']]
     print(f"\nLoaded {len(finetune_dataset_subset)} tasks (from training set) for SVAMP finetune data generation.")
 

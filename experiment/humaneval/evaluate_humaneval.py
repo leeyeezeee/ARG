@@ -23,7 +23,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate model performance on HumanEval")
     parser.add_argument('--model_path', type=str, default='./output/xxxx',
                         help="Trained model path (.pth)")
-    parser.add_argument('--dataset_path', type=str, default='../../local_datasets/humaneval/humaneval-py.jsonl',
+    parser.add_argument('--dataset_path', type=str, default='../../datasets/humaneval/humaneval-py.jsonl',
                         help="HumanEval dataset path")
     parser.add_argument('--task_split_path', type=str, default='./task_split_humaneval.json',
                         help="Task split file path")
@@ -53,7 +53,7 @@ async def main(ef=True):
         args.model_name = 'best'
     model = load_model(args.model_path, ef=ef)
     model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     executor = PyExecutor()
     role_constraints_dict = ROLE_DESCRIPTION
     full_dataset = JSONLReader.parse_file(args.dataset_path)

@@ -169,7 +169,7 @@ async def generate_pruned_data(args, dataset_subset, model_path, output_dir):
     print("\n" + "=" * 20 + " Stage 2a: Generating pruned graphs " + "=" * 20)
     model = load_model(model_path)
     model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     executor = PyExecutor()
     role_constraints = ROLE_DESCRIPTION
 
@@ -362,7 +362,7 @@ async def main():
     with open(TASK_SPLIT_FILE, 'r') as f:
         task_split = json.load(f)
     indices = task_split['finetune_tasks_indices']
-    full = JSONLReader.parse_file("../../local_datasets/humaneval/humaneval-py.jsonl")
+    full = JSONLReader.parse_file("../../datasets/humaneval/humaneval-py.jsonl")
     subset = [full[i] for i in indices]
     print(f"Loaded {len(subset)} tasks for finetune data generation.")
 

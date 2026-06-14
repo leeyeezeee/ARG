@@ -24,6 +24,32 @@ outputs/
 runs/
 checkpoints/
 
+# Local environment & secrets
+.env
+
+# Dataset data files (keep loader scripts in datasets/*.py)
+datasets/*
+!datasets/*.py
+
+# Experiment run scripts (local commands)
+experiment/**/run.sh
+
+# Training graph data (cold start & finetune)
+experiment/ColdStartData_*/
+experiment/FinetuneData_*/
+
+# Model checkpoints & training outputs
+experiment/*/output/
+experiment/output/
+
+# Evaluation & training result files
+experiment/*/res_logs/
+experiment/*/task_split_*.json
+experiment/*/records.csv
+experiment/*/ARGDesigner_results.csv
+experiment/**/*_eval_results.jsonl
+experiment/**/precomputed_role_embeddings.pkl
+
 # OS/editor metadata
 .DS_Store
 Thumbs.db

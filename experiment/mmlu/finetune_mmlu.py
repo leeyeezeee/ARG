@@ -24,7 +24,7 @@ from sentence_transformers import SentenceTransformer
 from experiment import process_dataset as gdata
 
 from mas_framework.graph.graph import Graph, TestGraph
-from local_datasets.mmlu_dataset import MMLUDataset
+from datasets.mmlu_dataset import MMLUDataset
 from experiment.mmlu.mmlu_prompt_set import ROLE_DESCRIPTION
 
 FINETUNE_DATA_DIR = "../FinetuneData_mmlu"
@@ -169,7 +169,7 @@ async def generate_pruned_data(args, dataset, model_path, output_dir):
     print("\n==================== Stage 2a: Generate Pruned Data ====================")
     model = load_model(model_path)
     model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     accuracy = Accuracy()
     role_constraints_dict = ROLE_DESCRIPTION
     original_dataset = dataset.dataset

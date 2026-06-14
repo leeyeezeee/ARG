@@ -16,7 +16,7 @@ from mas_framework.graph.graph import Graph, TestGraph
 from mas_framework.tools.reader.readers import JSONLReader
 from experiment.utils import get_kwargs, save_graph_with_features
 from experiment.gsm8k.gsm8k_prompt_set import ROLE_DESCRIPTION
-from local_datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
+from datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
 
 OUTPUT_DIR = "../ColdStartData_gsm8k"
 TASK_SPLIT_FILE = "./task_split_gsm8k.json"
@@ -26,7 +26,7 @@ BASE_RATE = 0.4
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Generate cold-start data for GSM8K")
-    parser.add_argument('--dataset_json', type=str, default="../../local_datasets/gsm8k/gsm8k.jsonl",
+    parser.add_argument('--dataset_json', type=str, default="../../datasets/gsm8k/gsm8k.jsonl",
                         help="Path to GSM8K JSONL dataset")
     parser.add_argument('--llm_name', type=str, default="qwen3-8b",
                         help="Name of the LLM model to use")

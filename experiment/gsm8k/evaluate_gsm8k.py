@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 from mas_framework.tools.reader.readers import JSONLReader
 from mas_framework.graph.graph import TestGraph
 from experiment.utils import load_model, generate_graph, convert_to_pyg_graph
-from local_datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
+from datasets.gsm8k_dataset import gsm_data_process, gsm_get_predict
 from gsm8k_prompt_set import ROLE_DESCRIPTION
 
 
@@ -26,7 +26,7 @@ def parse_args():
                         default='output/xxxx',
                         help="Path to trained model directory")
     parser.add_argument('--dataset_path', type=str,
-                        default='../../local_datasets/gsm8k/gsm8k.jsonl',
+                        default='../../datasets/gsm8k/gsm8k.jsonl',
                         help="Path to GSM8K dataset JSONL file")
     parser.add_argument('--task_split_path', type=str,
                         default='./task_split_gsm8k.json',
@@ -61,7 +61,7 @@ async def main(ef=True):
     args.model_name = 'ef_best' if ef else 'best'
     simple_ar_model = load_model(args.model_path, ef=ef)
     simple_ar_model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_constraints_dict = ROLE_DESCRIPTION
 
     full_dataset_raw = JSONLReader.parse_file(args.dataset_path)

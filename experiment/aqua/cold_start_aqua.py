@@ -17,7 +17,7 @@ from mas_framework.graph.graph import Graph, TestGraph
 from mas_framework.tools.reader.readers import JSONLReader
 from experiment.utils import get_kwargs, save_graph_with_features
 from experiment.aqua.aqua_prompt_set import ROLE_DESCRIPTION
-from local_datasets.aqua_dataset import aqua_data_process, aqua_get_predict
+from datasets.aqua_dataset import aqua_data_process, aqua_get_predict
 import experiment.prompt.AQuA_prompt_set
 
 OUTPUT_DIR = "../ColdStartData_aqua"
@@ -27,7 +27,7 @@ BASE_RATE = 0.4
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate cold-start data for Aqua")
-    parser.add_argument('--dataset_json', type=str, default="../../local_datasets/AQuA/AQuA.jsonl")
+    parser.add_argument('--dataset_json', type=str, default="../../datasets/AQuA/AQuA.jsonl")
     parser.add_argument('--llm_name', type=str, default="qwen3-8b",
                         help="Name of the LLM model to use")
     parser.add_argument('--agent_names', nargs='+', type=str, default=['MathSolver'],

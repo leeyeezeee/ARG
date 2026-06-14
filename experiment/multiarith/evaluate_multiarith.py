@@ -16,7 +16,7 @@ from sentence_transformers import SentenceTransformer
 from mas_framework.tools.reader.readers import JSONReader
 from mas_framework.graph.graph import TestGraph
 from experiment.utils import load_model, generate_graph, convert_to_pyg_graph
-from local_datasets.gsm8k_dataset import multiarith_data_process, gsm_get_predict
+from datasets.gsm8k_dataset import multiarith_data_process, gsm_get_predict
 from gsm8k_prompt_set import ROLE_DESCRIPTION  # 复用 gsm8k 的 prompt
 
 
@@ -26,7 +26,7 @@ def parse_args():
                         default='output/xxxx',
                         help="Path to trained model directory")
     parser.add_argument('--dataset_path', type=str,
-                        default='../../local_datasets/MultiArith/MultiArith.json',
+                        default='../../datasets/MultiArith/MultiArith.json',
                         help="Path to MultiArith JSON dataset")
     parser.add_argument('--task_split_path', type=str,
                         default='./task_split_multiarith.json',
@@ -61,7 +61,7 @@ async def main(ef=True):
     args.model_name = 'ef_best' if ef else 'best'
     simple_ar_model = load_model(args.model_path, ef=ef)
     simple_ar_model.eval()
-    sentence_model = SentenceTransformer('/Models/all-MiniLM-L6-v2')
+    sentence_model = SentenceTransformer('/data/lyz/models/all-MiniLM-L6-v2')
     role_constraints_dict = ROLE_DESCRIPTION
 
     full_dataset_raw = JSONReader.parse_file(args.dataset_path)  # MultiArith 是 JSON 数组

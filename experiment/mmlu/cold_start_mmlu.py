@@ -16,8 +16,8 @@ from experiment.mmlu.mmlu_prompt_set import ROLE_DESCRIPTION
 import asyncio
 import argparse
 import random
-from local_datasets.mmlu_dataset import MMLUDataset
-from local_datasets.MMLU.download import download
+from datasets.mmlu_dataset import MMLUDataset
+from datasets.MMLU.download import download
 from mas_framework.graph.graph import Graph, TestGraph
 
 
