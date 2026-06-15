@@ -52,8 +52,83 @@ def parse_args():
                         help="model for task embeddings")
     parser.add_argument('--summary_log_file', type=str, default='./res_logs/evaluation_summary.jsonl',
                         help="log file to record evaluation summaries")
+    parser.add_argument('--wrong_samples_file', type=str, default='./res_logs/mmlu_wrong_samples.jsonl',
+                        help="JSONL file to save wrong MMLU samples with generated graph and outputs")
 
     return parser.parse_args()
+
+
+def serialize_generated_graph(graph) -> Dict[str, Any]:
+    nodes = []
+    for node_id, data in graph.nodes(data=True):
+        nodes.append({
+            "id": int(node_id) if isinstance(node_id, (int, np.integer)) else str(node_id),
+            "role": data.get("role", "Unknown"),
+            "constraint": data.get("constraint", ""),
+            "label": data.get("label"),
+        })
+
+    edges = []
+    for src, dst, data in graph.edges(data=True):
+        src_role = graph.nodes[src].get("role", "Unknown")
+        dst_role = graph.nodes[dst].get("role", "Unknown")
+        edges.append({
+            "source": int(src) if isinstance(src, (int, np.integer)) else str(src),
+            "target": int(dst) if isinstance(dst, (int, np.integer)) else str(dst),
+            "source_role": src_role,
+            "target_role": dst_role,
+            "label": data.get("label"),
+        })
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "metadata": {
+            "mode": graph.graph.get("mode"),
+            "agent_nums": graph.graph.get("agent_nums"),
+            "roles": graph.graph.get("roles"),
+            "sampled_node_types": graph.graph.get("sampled_node_types"),
+        }
+    }
+
+
+def serialize_test_graph_outputs(test_graph: TestGraph) -> Dict[str, Any]:
+    nodes = []
+    for idx, node in enumerate(test_graph.nodes.values()):
+        nodes.append({
+            "index": idx,
+            "id": node.id,
+            "role": getattr(node, "role", ""),
+            "constraint": getattr(node, "constraint", ""),
+            "outputs": getattr(node, "outputs", []),
+            "spatial_predecessors": [
+                {"id": predecessor.id, "role": getattr(predecessor, "role", "")}
+                for predecessor in getattr(node, "spatial_predecessors", [])
+            ],
+            "spatial_successors": [
+                {"id": successor.id, "role": getattr(successor, "role", "")}
+                for successor in getattr(node, "spatial_successors", [])
+            ],
+        })
+
+    decision_node = test_graph.decision_node
+    return {
+        "nodes": nodes,
+        "decision_node": {
+            "id": decision_node.id,
+            "role": getattr(decision_node, "role", ""),
+            "constraint": getattr(decision_node, "constraint", ""),
+            "outputs": getattr(decision_node, "outputs", []),
+        }
+    }
+
+
+def append_wrong_sample(record: Dict[str, Any], path: str):
+    output_dir = os.path.dirname(path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as file:
+        file.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
 async def evaluate(
@@ -90,6 +165,9 @@ async def evaluate(
         start_ts = time.time()
         answer_tasks = []
         questions = []
+        generated_graphs = []
+        test_graphs = []
+        question_ids = []
 
         for i, record in enumerate(record_batch):
             input_dict = dataset.record_to_input(record)
@@ -97,6 +175,7 @@ async def evaluate(
             questions.append(task_text)
 
             question_id = i_batch * args.eval_batch_size + i + 1
+            question_ids.append(question_id)
 
             task_embedding = torch.tensor(
                 sentence_model.encode(task_text),
@@ -109,6 +188,7 @@ async def evaluate(
                 role_constraints_dict,
                 question_id=question_id
             )
+            generated_graphs.append(generated_graph[0])
 
             tg = TestGraph(
                 domain=args.domain,
@@ -116,18 +196,27 @@ async def evaluate(
                 decision_method=args.decision_method,
                 pyg_data=convert_to_pyg_graph(generated_graph[0], task_text)
             )
+            test_graphs.append(tg)
             answer_tasks.append(asyncio.create_task(tg.arun(input_dict, args.num_rounds)))
 
         raw_results = await asyncio.gather(*answer_tasks, return_exceptions=True)
         is_corrects = []
 
-        for raw_answer, record in zip(raw_results, record_batch):
+        for i, (raw_answer, record, graph, test_graph) in enumerate(
+                zip(raw_results, record_batch, generated_graphs, test_graphs)):
+            correct_answer = dataset.record_to_target_answer(record)
+            error = None
             if isinstance(raw_answer, Exception):
                 print(f"LLM error for question: {raw_answer}")
-                is_correct = accuracy.update("", dataset.record_to_target_answer(record))
+                answer = ""
+                error = str(raw_answer)
+                is_correct = accuracy.update(answer, correct_answer)
             else:
-                answer = dataset.postprocess_answer(raw_answer)
-                correct_answer = dataset.record_to_target_answer(record)
+                try:
+                    answer = dataset.postprocess_answer(raw_answer)
+                except Exception as exc:
+                    answer = ""
+                    error = f"postprocess error: {exc}"
                 is_correct = accuracy.update(answer, correct_answer)
 
             print(f"Accuracy: {accuracy.print()} | "
@@ -135,6 +224,28 @@ async def evaluate(
                   f"Tokens: P({int(PromptTokens.instance().value)}), C({int(CompletionTokens.instance().value)})")
 
             is_corrects.append(is_correct)
+            if not is_correct:
+                wrong_sample = {
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "dataset": "mmlu",
+                    "id": i_batch * args.eval_batch_size + i,
+                    "question_id": question_ids[i],
+                    "question": record.get("question", ""),
+                    "options": {
+                        "A": record.get("A", ""),
+                        "B": record.get("B", ""),
+                        "C": record.get("C", ""),
+                        "D": record.get("D", ""),
+                    },
+                    "task": questions[i],
+                    "correct_answer": correct_answer,
+                    "predicted_answer": answer,
+                    "raw_output": None if isinstance(raw_answer, Exception) else raw_answer,
+                    "error": error,
+                    "generated_graph": serialize_generated_graph(graph),
+                    "execution_outputs": serialize_test_graph_outputs(test_graph),
+                }
+                append_wrong_sample(wrong_sample, args.wrong_samples_file)
 
         for i in range(len(record_batch)):
             batch_data = [{
@@ -151,6 +262,7 @@ async def evaluate(
 
     accuracy.print()
     print("Evaluation complete!")
+    print(f"Wrong samples saved to: {args.wrong_samples_file}")
     return accuracy.get()
 
 
@@ -232,7 +344,8 @@ async def main(ef=True):
         "cost": final_cost,
         "prompt_tokens": final_prompt_tokens,
         "completion_tokens": final_completion_tokens,
-        "detail_file": "ARGDesigner_results.csv"
+        "detail_file": "ARGDesigner_results.csv",
+        "wrong_samples_file": args.wrong_samples_file,
     }
 
     try:
