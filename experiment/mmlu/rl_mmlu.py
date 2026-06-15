@@ -31,8 +31,7 @@ T = TypeVar("T")
 EPS = 1e-8
 PROB_EPS = 1e-6
 
-RL_BEST_CHECKPOINT = "ef_best_model.pt"
-RL_FINAL_CHECKPOINT = "ef_final_model"
+RL_FINAL_CHECKPOINT = "ef_best_model.pth"
 
 DEFAULT_JUDGE_TIMEOUT = 120.0
 DEFAULT_JUDGE_CONNECT_TIMEOUT = 10.0
@@ -1079,7 +1078,6 @@ async def train_rl(args):
             "OPENAI_API_KEY, or --semantic_judge_base_url for a local OpenAI-compatible server."
         )
 
-    best_correct_rate = -1.0
     metrics_path = os.path.join(args.output_dir, "rl_metrics.jsonl")
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -1230,10 +1228,6 @@ async def train_rl(args):
             f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
             f"time={time.time() - start_ts:.1f}s"
         )
-
-        if correct_rate > best_correct_rate:
-            best_correct_rate = correct_rate
-            save_rl_checkpoint(model, args.output_dir, args, RL_BEST_CHECKPOINT)
 
         if args.eval_every > 0 and (iteration + 1) % args.eval_every == 0:
             await evaluate_current_generator(

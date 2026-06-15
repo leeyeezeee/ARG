@@ -14,7 +14,6 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 from experiment.mmlu.rl_mmlu import (
-    RL_BEST_CHECKPOINT,
     RL_FINAL_CHECKPOINT,
     SemanticEntailmentJudge,
     attach_edge_trace_to_test_graph,
@@ -295,7 +294,6 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
 
     os.makedirs(args.output_dir, exist_ok=True)
     metrics_path = os.path.join(args.output_dir, "rl_metrics.jsonl")
-    best_correct_rate = -1.0
 
     for iteration in range(args.num_iterations):
         start_ts = time.time()
@@ -376,10 +374,6 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
             f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
             f"time={time.time() - start_ts:.1f}s"
         )
-
-        if correct_rate > best_correct_rate:
-            best_correct_rate = correct_rate
-            save_rl_checkpoint(model, args.output_dir, args, RL_BEST_CHECKPOINT)
 
         if args.eval_every > 0 and (iteration + 1) % args.eval_every == 0:
             await evaluate_current_generator(
