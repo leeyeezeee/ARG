@@ -14,6 +14,8 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 from experiment.mmlu.rl_mmlu import (
+    RL_BEST_CHECKPOINT,
+    RL_FINAL_CHECKPOINT,
     SemanticEntailmentJudge,
     attach_edge_trace_to_test_graph,
     configure_trainable_parameters,
@@ -84,7 +86,8 @@ def build_parser(spec: RLDatasetSpec):
     parser.add_argument("--nonpositive_edge_penalty", type=float, default=0.01,
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
     parser.add_argument("--train_node_context", action="store_true")
-    parser.add_argument("--save_every", type=int, default=5)
+    parser.add_argument("--save_every", type=int, default=5,
+                        help="Deprecated compatibility option; per-iteration RL checkpoints are not saved.")
     parser.add_argument("--eval_every", type=int, default=5)
     parser.add_argument("--eval_batch_size", type=int, default=8)
     parser.add_argument("--eval_edge_epsilon", type=float, default=0.0)
@@ -376,18 +379,14 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
 
         if correct_rate > best_correct_rate:
             best_correct_rate = correct_rate
-            save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
-            save_rl_checkpoint(model, args.output_dir, args, "rl_best_model.pth")
-
-        if args.save_every > 0 and (iteration + 1) % args.save_every == 0:
-            save_rl_checkpoint(model, args.output_dir, args, f"rl_iter_{iteration + 1}.pth")
+            save_rl_checkpoint(model, args.output_dir, args, RL_BEST_CHECKPOINT)
 
         if args.eval_every > 0 and (iteration + 1) % args.eval_every == 0:
             await evaluate_current_generator(
                 model, sentence_model, spec, args, eval_records, iteration + 1
             )
 
-    save_rl_checkpoint(model, args.output_dir, args, "rl_final_model.pth")
+    save_rl_checkpoint(model, args.output_dir, args, RL_FINAL_CHECKPOINT)
 
 
 def run_spec(spec: RLDatasetSpec):

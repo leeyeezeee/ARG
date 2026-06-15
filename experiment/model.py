@@ -615,22 +615,27 @@ class ARGDesigner(nn.Module):
             generated_roles = [[] for _ in range(batch_size)]
             sampled_node_ids = []
             node_embeddings = [[] for _ in range(batch_size)]
+            previous_edge_features = torch.zeros(
+                batch_size,
+                self.num_nodes_to_consider * self.len_edge_vec,
+                device=self.args.device
+            )
 
             h_node = torch.zeros(1, batch_size, self.args.hidden_size_node_level_transformer,
                                  device=self.args.device)
-            start_token_input = torch.zeros(batch_size, 1, feature_len, device=self.args.device)
             if task_embedding is not None:
                 t_proc = self.task_processor(task_embedding)
-                start_token_input[:, 0, :self.embedding_dim] = t_proc
-            start_token_input[:, 0, self.embedding_dim + self.len_edge_vec - 2] = 1
-            start_token_input = self.node_project(start_token_input)
-            _, h_node = self.node_gru(start_token_input, h_node)
 
             finished_flags = [False] * batch_size
 
             for i in range(max_num_node):
                 current_node_input = torch.zeros(batch_size, 1, feature_len, device=self.args.device)
-                if i > 0:
+                if i == 0:
+                    if task_embedding is not None:
+                        current_node_input[:, 0, :self.embedding_dim] = t_proc
+                    current_node_input[:, 0, self.embedding_dim + self.len_edge_vec - 2] = 1
+                else:
+                    current_node_input[:, 0, self.embedding_dim:] = previous_edge_features
                     for b in range(batch_size):
                         prev_embs = torch.stack(node_embeddings[b], dim=0)
                         _, h_agg = self.prev_nodes_aggregator(prev_embs.unsqueeze(0))
@@ -713,6 +718,14 @@ class ARGDesigner(nn.Module):
                         if not x_pred_edge[orig, i].any():
                             j_forced = np.random.randint(0, min(i, self.num_nodes_to_consider))
                             x_pred_edge[orig, i, j_forced] = HAS_EDGE_TOKEN
+                    previous_edge_features[orig].zero_()
+                    valid_edge_slots = min(self.num_nodes_to_consider, i)
+                    for j in range(valid_edge_slots):
+                        offset = j * self.len_edge_vec
+                        if x_pred_edge[orig, i, j] == HAS_EDGE_TOKEN:
+                            previous_edge_features[orig, offset] = 1
+                        else:
+                            previous_edge_features[orig, offset + 1] = 1
 
             # Build final graphs
             for b in range(batch_size):

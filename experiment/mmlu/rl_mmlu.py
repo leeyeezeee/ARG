@@ -31,6 +31,9 @@ T = TypeVar("T")
 EPS = 1e-8
 PROB_EPS = 1e-6
 
+RL_BEST_CHECKPOINT = "ef_best_model.pt"
+RL_FINAL_CHECKPOINT = "ef_final_model"
+
 DEFAULT_JUDGE_TIMEOUT = 120.0
 DEFAULT_JUDGE_CONNECT_TIMEOUT = 10.0
 DEFAULT_JUDGE_MAX_RETRIES = 3
@@ -77,7 +80,8 @@ def parse_args():
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
     parser.add_argument("--train_node_context", action="store_true",
                         help="Allow edge loss gradients into node context layers at the same LR.")
-    parser.add_argument("--save_every", type=int, default=5)
+    parser.add_argument("--save_every", type=int, default=5,
+                        help="Deprecated compatibility option; per-iteration RL checkpoints are not saved.")
     parser.add_argument("--eval_every", type=int, default=5,
                         help="Evaluate the current generator every N RL iterations. 0 disables periodic eval.")
     parser.add_argument("--eval_batch_size", type=int, default=8,
@@ -1229,16 +1233,7 @@ async def train_rl(args):
 
         if correct_rate > best_correct_rate:
             best_correct_rate = correct_rate
-            save_rl_checkpoint(model, args.output_dir, args, "ef_best_model.pth")
-            save_rl_checkpoint(model, args.output_dir, args, "rl_best_model.pth")
-
-        if args.save_every > 0 and (iteration + 1) % args.save_every == 0:
-            save_rl_checkpoint(
-                model,
-                args.output_dir,
-                args,
-                f"rl_iter_{iteration + 1}.pth",
-            )
+            save_rl_checkpoint(model, args.output_dir, args, RL_BEST_CHECKPOINT)
 
         if args.eval_every > 0 and (iteration + 1) % args.eval_every == 0:
             await evaluate_current_generator(
@@ -1250,7 +1245,7 @@ async def train_rl(args):
                 iteration + 1,
             )
 
-    save_rl_checkpoint(model, args.output_dir, args, "rl_final_model.pth")
+    save_rl_checkpoint(model, args.output_dir, args, RL_FINAL_CHECKPOINT)
 
 
 if __name__ == "__main__":
