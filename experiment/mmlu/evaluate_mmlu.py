@@ -219,7 +219,8 @@ async def evaluate(
                     error = f"postprocess error: {exc}"
                 is_correct = accuracy.update(answer, correct_answer)
 
-            print(f"Accuracy: {accuracy.print()} | "
+            current_accuracy = accuracy.get() * 100
+            print(f"Accuracy: {current_accuracy:.1f}% | "
                   f"Cost: ${Cost.instance().value:.4f} | "
                   f"Tokens: P({int(PromptTokens.instance().value)}), C({int(CompletionTokens.instance().value)})")
 
