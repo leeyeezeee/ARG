@@ -24,6 +24,7 @@ from experiment.mmlu.rl_mmlu import (
     sample_graph_with_edge_trace,
     save_rl_checkpoint,
     scale_edge_rewards,
+    wrong_answer_edge_losses,
 )
 from experiment.utils import convert_to_pyg_graph, load_model
 from mas_framework.graph.graph import TestGraph
@@ -196,6 +197,12 @@ async def run_one_sample(
         )
         if edge_losses:
             loss = torch.stack(edge_losses).sum()
+    elif train_mode:
+        edge_losses = wrong_answer_edge_losses(test_graph.edge_log_probs)
+        if edge_losses:
+            loss = torch.stack(edge_losses).mean()
+
+    if train_mode and is_correct:
         if trace["edge_entropies"]:
             entropy_bonus = torch.stack(trace["edge_entropies"]).mean()
             loss = loss - args.entropy_coef * entropy_bonus

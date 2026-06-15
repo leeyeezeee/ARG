@@ -32,6 +32,7 @@ EPS = 1e-8
 PROB_EPS = 1e-6
 
 RL_FINAL_CHECKPOINT = "ef_best_model.pth"
+WRONG_EDGE_REWARD = -1.0
 
 DEFAULT_JUDGE_TIMEOUT = 120.0
 DEFAULT_JUDGE_CONNECT_TIMEOUT = 10.0
@@ -510,6 +511,17 @@ def edge_semantic_losses(
         if local_reward != 0:
             losses.append(-edge_info["log_prob"] * float(local_reward))
     return losses
+
+
+def wrong_answer_edge_losses(
+    edge_log_probs: List[Dict[str, Any]],
+) -> List[torch.Tensor]:
+    if not edge_log_probs:
+        return []
+    return [
+        -edge_info["log_prob"] * WRONG_EDGE_REWARD
+        for edge_info in edge_log_probs
+    ]
 
 
 def configure_trainable_parameters(model, train_node_context: bool):
@@ -1166,7 +1178,12 @@ async def train_rl(args):
                     )
                     if edge_losses:
                         sample_loss = torch.stack(edge_losses).sum()
+                else:
+                    edge_losses = wrong_answer_edge_losses(test_graph.edge_log_probs)
+                    if edge_losses:
+                        sample_loss = torch.stack(edge_losses).mean()
 
+                if is_correct:
                     if trace["edge_entropies"]:
                         entropy_bonus = torch.stack(trace["edge_entropies"]).mean()
                         sample_loss = sample_loss - args.entropy_coef * entropy_bonus
