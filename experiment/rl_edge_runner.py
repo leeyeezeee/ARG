@@ -86,6 +86,8 @@ def build_parser(spec: RLDatasetSpec):
     parser.add_argument("--nonpositive_edge_penalty", type=float, default=0.01,
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
     parser.add_argument("--train_node_context", action="store_true")
+    parser.add_argument("--feed_previous_edge_features_to_node", action="store_true",
+                        help="Feed sampled previous edge features into subsequent node generation during RL rollout.")
     parser.add_argument("--save_every", type=int, default=5,
                         help="Deprecated compatibility option; per-iteration RL checkpoints are not saved.")
     parser.add_argument("--eval_every", type=int, default=5)
@@ -149,6 +151,7 @@ async def run_one_sample(
         edge_epsilon=args.edge_epsilon if train_mode else args.eval_edge_epsilon,
         train_node_context=args.train_node_context if train_mode else False,
         ref_model=ref_model if train_mode else None,
+        feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
     )
     pyg_graph = convert_to_pyg_graph(generated_graph, task_text)
     test_graph = TestGraph(

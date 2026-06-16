@@ -80,6 +80,8 @@ def parse_args():
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
     parser.add_argument("--train_node_context", action="store_true",
                         help="Allow edge loss gradients into node context layers at the same LR.")
+    parser.add_argument("--feed_previous_edge_features_to_node", action="store_true",
+                        help="Feed sampled previous edge features into subsequent node generation during RL rollout.")
     parser.add_argument("--save_every", type=int, default=5,
                         help="Deprecated compatibility option; per-iteration RL checkpoints are not saved.")
     parser.add_argument("--eval_every", type=int, default=5,
@@ -572,6 +574,7 @@ def sample_graph_with_edge_trace(
     edge_epsilon: float,
     train_node_context: bool,
     ref_model=None,
+    feed_previous_edge_features_to_node: bool = False,
 ) -> Tuple[nx.DiGraph, Dict[str, List[Any]]]:
     device = model.args.device
     task_batch = task_embedding.to(device).float().view(1, -1)
@@ -646,6 +649,15 @@ def sample_graph_with_edge_trace(
     edge_log_probs: List[Dict[str, Any]] = []
     edge_entropies: List[torch.Tensor] = []
     edge_kls: List[torch.Tensor] = []
+    previous_edge_features = torch.zeros(
+        model.num_nodes_to_consider * model.len_edge_vec,
+        device=device,
+    )
+    if use_ref_model:
+        ref_previous_edge_features = torch.zeros(
+            ref_model.num_nodes_to_consider * ref_model.len_edge_vec,
+            device=ref_device,
+        )
 
     proc_cand = model.role_processor(candidate_embs)
     for i in range(max_num_nodes):
@@ -657,6 +669,8 @@ def sample_graph_with_edge_trace(
             gate = torch.sigmoid(torch.sum(hist * t_proc[0]) / model.embedding_dim)
             combined = (1 - gate) * hist + gate * t_proc[0]
             current_input[0, 0, :model.embedding_dim] = combined
+            if feed_previous_edge_features_to_node:
+                current_input[0, 0, model.embedding_dim:] = previous_edge_features
 
         active_out, h_node = model.node_gru(model.node_project(current_input), h_node)
         if use_ref_model:
@@ -673,6 +687,10 @@ def sample_graph_with_edge_trace(
                     )
                     ref_combined = (1 - ref_gate) * ref_hist + ref_gate * ref_t_proc[0]
                 ref_current_input[0, 0, :ref_model.embedding_dim] = ref_combined
+                if feed_previous_edge_features_to_node:
+                    ref_current_input[0, 0, ref_model.embedding_dim:] = (
+                        ref_previous_edge_features
+                    )
             with torch.no_grad():
                 ref_active_out, ref_h_node = ref_model.node_gru(
                     ref_model.node_project(ref_current_input),
@@ -721,6 +739,7 @@ def sample_graph_with_edge_trace(
 
         selected_for_node = []
         candidate_records = []
+        sampled_edge_exists: List[int] = []
         for j in range(min(model.num_nodes_to_consider, i)):
             if j > 0:
                 edge_input = model.edge_project(edge_input)
@@ -758,6 +777,7 @@ def sample_graph_with_edge_trace(
             next_input = torch.zeros(1, 1, model.len_edge_vec, device=device)
             next_input[:, 0, int(exists.item())] = 1
             edge_input = next_input
+            sampled_edge_exists.append(int(exists.item()))
             if use_ref_model:
                 ref_next_input = torch.zeros(
                     1, 1, ref_model.len_edge_vec, device=ref_device
@@ -774,6 +794,9 @@ def sample_graph_with_edge_trace(
         if i > 0 and not selected_for_node and candidate_records:
             src, dst = random.choice(candidate_records)
             selected_for_node.append((src, dst, None))
+            forced_j = i - src - 1
+            if forced_j < len(sampled_edge_exists):
+                sampled_edge_exists[forced_j] = has_edge_token
 
         for src, dst, log_prob in selected_for_node:
             edges.append((src, dst))
@@ -786,6 +809,20 @@ def sample_graph_with_edge_trace(
                     "log_prob": log_prob,
                     "edge_key": f"spatial:0:{src}->{dst}",
                 })
+
+        previous_edge_features.zero_()
+        valid_edge_slots = min(model.num_nodes_to_consider, i)
+        for j in range(valid_edge_slots):
+            offset = j * model.len_edge_vec
+            edge_token = sampled_edge_exists[j] if j < len(sampled_edge_exists) else 0
+            previous_edge_features[offset + int(edge_token)] = 1
+        if use_ref_model:
+            ref_previous_edge_features.zero_()
+            ref_valid_edge_slots = min(ref_model.num_nodes_to_consider, i)
+            for j in range(ref_valid_edge_slots):
+                offset = j * ref_model.len_edge_vec
+                edge_token = sampled_edge_exists[j] if j < len(sampled_edge_exists) else 0
+                ref_previous_edge_features[offset + int(edge_token)] = 1
 
     graph = nx.DiGraph()
     for idx, role in enumerate(generated_roles):
@@ -1019,6 +1056,7 @@ async def evaluate_current_generator(
                 role_constraints,
                 edge_epsilon=args.eval_edge_epsilon,
                 train_node_context=False,
+                feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
             )
             edge_counts.append(generated_graph.number_of_edges())
             pyg_graph = convert_to_pyg_graph(generated_graph, task_text)
@@ -1122,6 +1160,7 @@ async def train_rl(args):
                     edge_epsilon=args.edge_epsilon,
                     train_node_context=args.train_node_context,
                     ref_model=ref_model,
+                    feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
                 )
                 pyg_graph = convert_to_pyg_graph(generated_graph, task_text)
                 test_graph = TestGraph(
