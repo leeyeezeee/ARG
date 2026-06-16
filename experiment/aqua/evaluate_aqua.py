@@ -74,6 +74,7 @@ async def main(ef=True):
     total_tasks = len(dataset)
     solved_tasks = 0
     results_list = []
+    processed_tasks = 0
 
     from typing import Iterator, List, Any
     import math
@@ -128,7 +129,12 @@ async def main(ef=True):
                     "predicted_answer": None, "raw_response": None, "is_solved": False, "error": str(e)
                 })
 
+        processed_tasks += len(record_batch)
+
         if not answer_tasks:
+            with open(args.output_file, 'w', encoding='utf-8') as f:
+                for res in results_list:
+                    f.write(json.dumps(res) + '\n')
             continue
         
         all_results = await asyncio.gather(*answer_tasks, return_exceptions=True)
@@ -157,13 +163,14 @@ async def main(ef=True):
             if is_solved:
                 solved_tasks += 1
             
-            results_list.append({
-                "task_id": task_id, "question": task_text, "true_answer": true_answer,
-                "predicted_answer": predict_answer, "raw_response": raw_answer, "is_solved": is_solved,
-                "num_nodes": generated_graph.number_of_nodes(), "num_edges": generated_graph.number_of_edges(),
-            })
+            if not is_solved:
+                results_list.append({
+                    "task_id": task_id, "question": task_text, "true_answer": true_answer,
+                    "predicted_answer": predict_answer, "raw_response": raw_answer, "is_solved": is_solved,
+                    "num_nodes": generated_graph.number_of_nodes(), "num_edges": generated_graph.number_of_edges(),
+                })
 
-        current_processed = len(results_list)
+        current_processed = processed_tasks
         acc = solved_tasks / current_processed * 100 if current_processed > 0 else 0
         pbar.set_postfix({
             "Accuracy": f"{acc:.2f}% ({solved_tasks}/{current_processed})",
@@ -187,7 +194,7 @@ async def main(ef=True):
     print(f"Total Prompt Tokens: {int(final_prompt_tokens)}")
     print(f"Total Completion Tokens: {int(final_completion_tokens)}")
     print("-" * 50)
-    print(f"Detailed results saved to: {args.output_file}")
+    print(f"Wrong samples saved to: {args.output_file}")
 
     log_record = {
         "timestamp": datetime.datetime.now().isoformat(),

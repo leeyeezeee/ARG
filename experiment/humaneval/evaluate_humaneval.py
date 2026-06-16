@@ -72,6 +72,7 @@ async def main(ef=True):
     total_tasks = len(dataset)
     solved_tasks = 0
     results_list = []
+    processed_tasks = 0
     from typing import Iterator, List, Any
     import math
 
@@ -108,7 +109,12 @@ async def main(ef=True):
             coro = test_graph.arun({"task": task_text}, num_rounds=1)
             answer_tasks.append(coro)
             metadata_for_tasks.append({"record": record, "task_id": task_id, "generated_graph": generated_graph})
+        processed_tasks += len(record_batch)
+
         if not answer_tasks:
+            with open(args.output_file, 'w', encoding='utf-8') as f:
+                for res in results_list:
+                    f.write(json.dumps(res) + '\n')
             continue
         all_results = await asyncio.gather(*answer_tasks, return_exceptions=True)
         for i, result in enumerate(all_results):
@@ -129,16 +135,17 @@ async def main(ef=True):
             is_solved, _, _ = executor.execute(answer_code, [record["test"]], timeout=100)
             if is_solved:
                 solved_tasks += 1
-            result_item = {
-                "task_id": task_id,
-                "prompt": record["prompt"],
-                "generated_code": answer_code,
-                "is_solved": is_solved,
-                "num_nodes": generated_graph.number_of_nodes(),
-                "num_edges": generated_graph.number_of_edges(),
-            }
-            results_list.append(result_item)
-        current_processed = (i_batch * args.eval_batch_size) + len(record_batch)
+            if not is_solved:
+                result_item = {
+                    "task_id": task_id,
+                    "prompt": record["prompt"],
+                    "generated_code": answer_code,
+                    "is_solved": is_solved,
+                    "num_nodes": generated_graph.number_of_nodes(),
+                    "num_edges": generated_graph.number_of_edges(),
+                }
+                results_list.append(result_item)
+        current_processed = processed_tasks
         acc = solved_tasks / current_processed * 100
         pbar.set_postfix({
             "Accuracy": f"{acc:.2f}% ({solved_tasks}/{current_processed})",
@@ -159,7 +166,7 @@ async def main(ef=True):
     print(f"Total Prompt Tokens: {int(final_prompt_tokens)}")
     print(f"Total Completion Tokens: {int(final_completion_tokens)}")
     print("-" * 50)
-    print(f"Detailed evaluation results saved to: {args.output_file}")
+    print(f"Wrong samples saved to: {args.output_file}")
     log_record = {
         "timestamp": datetime.datetime.now().isoformat(),
         "dataset": "humaneval",
