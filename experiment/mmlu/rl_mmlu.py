@@ -363,6 +363,14 @@ def scale_edge_rewards(
     rewards = torch.tensor(list(edge_rewards.values()), dtype=torch.float32)
     if not torch.isfinite(rewards).all():
         raise ValueError(f"Non-finite edge rewards: {edge_rewards}")
+
+    # Compare edges within the same generated graph instead of treating every
+    # positive entropy gain as independently good. This makes weak positive
+    # edges compete with stronger edges and naturally discourages redundant
+    # connections without adding a fixed graph-level sparsity penalty.
+    baseline = rewards.median()
+    relative_rewards = rewards - baseline
+
     abs_rewards = rewards.abs()
     scale = abs_rewards.std(unbiased=False)
     if float(scale) < EPS:
@@ -370,7 +378,7 @@ def scale_edge_rewards(
     if float(scale) < EPS:
         scale = torch.tensor(1.0, dtype=torch.float32)
 
-    scaled = rewards / (scale + EPS)
+    scaled = relative_rewards / (scale + EPS)
     if clip_value and clip_value > 0:
         scaled = scaled.clamp(-float(clip_value), float(clip_value))
 
