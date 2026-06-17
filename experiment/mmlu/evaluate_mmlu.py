@@ -137,7 +137,7 @@ async def evaluate(
         sentence_model,
         role_constraints_dict,
         args
-) -> float:
+) -> Dict[str, float]:
     """Evaluate model on MMLU dataset"""
     print(f"Evaluating model on {dataset.__class__.__name__}")
 
@@ -158,6 +158,9 @@ async def evaluate(
 
     data_len = min(len(dataset), limit_questions) if limit_questions is not None else len(dataset)
     num_batches = int(math.ceil(data_len / args.eval_batch_size))
+    total_nodes = 0
+    total_edges = 0
+    graph_count = 0
 
     for i_batch, record_batch in tqdm(enumerate(eval_loader(batch_size=args.eval_batch_size)), total=num_batches):
         print(f"{'-' * 80}")
@@ -189,6 +192,9 @@ async def evaluate(
                 question_id=question_id
             )
             generated_graphs.append(generated_graph[0])
+            total_nodes += generated_graph[0].number_of_nodes()
+            total_edges += generated_graph[0].number_of_edges()
+            graph_count += 1
 
             tg = TestGraph(
                 domain=args.domain,
@@ -264,7 +270,11 @@ async def evaluate(
     accuracy.print()
     print("Evaluation complete!")
     print(f"Wrong samples saved to: {args.wrong_samples_file}")
-    return accuracy.get()
+    return {
+        "accuracy": accuracy.get(),
+        "avg_num_nodes": total_nodes / graph_count if graph_count else 0.0,
+        "avg_num_edges": total_edges / graph_count if graph_count else 0.0,
+    }
 
 
 def write_to_csv(
@@ -312,13 +322,16 @@ async def main(ef=True):
     print('model_name', args.model_name)
     model = load_model(args.model_path, ef=ef)
 
-    score = await evaluate(
+    eval_metrics = await evaluate(
         model=model,
         dataset=dataset_test,
         sentence_model=sentence_model,
         role_constraints_dict=role_constraints_dict,
         args=args
     )
+    score = eval_metrics["accuracy"]
+    avg_num_nodes = eval_metrics["avg_num_nodes"]
+    avg_num_edges = eval_metrics["avg_num_edges"]
 
     final_cost = Cost.instance().value
     final_prompt_tokens = PromptTokens.instance().value
@@ -332,6 +345,8 @@ async def main(ef=True):
     print(f"Total cost: ${final_cost:.6f}")
     print(f"Total Prompt Tokens: {int(final_prompt_tokens)}")
     print(f"Total Completion Tokens: {int(final_completion_tokens)}")
+    print(f"Average nodes: {avg_num_nodes:.2f}")
+    print(f"Average edges: {avg_num_edges:.2f}")
     print("-" * 50)
     print("Detailed CSV results saved to: ARGDesigner_results.csv")
 
@@ -345,6 +360,8 @@ async def main(ef=True):
         "cost": final_cost,
         "prompt_tokens": final_prompt_tokens,
         "completion_tokens": final_completion_tokens,
+        "avg_num_nodes": avg_num_nodes,
+        "avg_num_edges": avg_num_edges,
         "detail_file": "ARGDesigner_results.csv",
         "wrong_samples_file": args.wrong_samples_file,
     }

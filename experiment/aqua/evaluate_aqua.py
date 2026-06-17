@@ -75,6 +75,9 @@ async def main(ef=True):
     solved_tasks = 0
     results_list = []
     processed_tasks = 0
+    total_nodes = 0
+    total_edges = 0
+    graph_count = 0
 
     from typing import Iterator, List, Any
     import math
@@ -111,6 +114,9 @@ async def main(ef=True):
                     raise RuntimeError("Graph generation failed.")
 
                 generated_graph = generated_graphs[0]
+                total_nodes += generated_graph.number_of_nodes()
+                total_edges += generated_graph.number_of_edges()
+                graph_count += 1
                 pyg_data = convert_to_pyg_graph(generated_graph, task_text)
                 test_graph = TestGraph(domain="aqua", llm_name=args.llm_name,
                                        decision_method=args.decision_method, pyg_data=pyg_data)
@@ -185,6 +191,8 @@ async def main(ef=True):
     final_cost = Cost.instance().value
     final_prompt_tokens = PromptTokens.instance().value
     final_completion_tokens = CompletionTokens.instance().value
+    avg_num_nodes = total_nodes / graph_count if graph_count else 0.0
+    avg_num_edges = total_edges / graph_count if graph_count else 0.0
 
     print("\n" + "=" * 50 + "\nEvaluation Summary")
     print(f"Model path: {args.model_path}")
@@ -193,6 +201,8 @@ async def main(ef=True):
     print(f"Total cost: ${final_cost:.6f}")
     print(f"Total Prompt Tokens: {int(final_prompt_tokens)}")
     print(f"Total Completion Tokens: {int(final_completion_tokens)}")
+    print(f"Average nodes: {avg_num_nodes:.2f}")
+    print(f"Average edges: {avg_num_edges:.2f}")
     print("-" * 50)
     print(f"Wrong samples saved to: {args.output_file}")
 
@@ -207,6 +217,8 @@ async def main(ef=True):
         "cost": final_cost,
         "prompt_tokens": final_prompt_tokens,
         "completion_tokens": final_completion_tokens,
+        "avg_num_nodes": avg_num_nodes,
+        "avg_num_edges": avg_num_edges,
         "detail_file": args.output_file
     }
 
