@@ -45,6 +45,8 @@ def parse_args():
                         help="Limit number of samples to evaluate")
     parser.add_argument('--eval_batch_size', type=int, default=48,
                         help="Parallel batch size during evaluation")
+    parser.add_argument('--feed_previous_edge_features_to_node', action='store_true',
+                        help="Feed generated previous-edge features into node generation during inference")
     return parser.parse_args()
 
 
@@ -123,7 +125,8 @@ async def main(ef=True):
 
                 generated_graphs = generate_graph(
                     simple_ar_model, task_embedding,
-                    role_constraints_dict, global_idx
+                    role_constraints_dict, global_idx,
+                    feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
                 )
                 if not generated_graphs:
                     raise RuntimeError("Graph generation failed.")

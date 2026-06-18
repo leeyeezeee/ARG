@@ -36,6 +36,8 @@ def parse_args():
                         help="Log file to record all evaluation run summaries")
     parser.add_argument('--limit', type=int, default=None, help="Limit number of evaluation samples")
     parser.add_argument('--eval_batch_size', type=int, default=32, help="Batch size for evaluation")
+    parser.add_argument('--feed_previous_edge_features_to_node', action='store_true',
+                        help="Feed generated previous-edge features into node generation during inference")
     return parser.parse_args()
 
 
@@ -98,7 +100,13 @@ async def main(ef=True):
             task_text = record["prompt"]
             task_id = record.get("task_id", f"task_{i_batch * args.eval_batch_size + len(metadata_for_tasks)}")
             task_embedding = torch.tensor(sentence_model.encode(task_text), device=model.args.device).float()
-            generated_graphs = generate_graph(model, task_embedding, role_constraints_dict, task_id)
+            generated_graphs = generate_graph(
+                model,
+                task_embedding,
+                role_constraints_dict,
+                task_id,
+                feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
+            )
             if not generated_graphs:
                 print(f"Warning: Failed to generate graph for task {task_id}.")
                 results_list.append(

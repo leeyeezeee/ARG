@@ -54,6 +54,8 @@ def parse_args():
                         help="log file to record evaluation summaries")
     parser.add_argument('--wrong_samples_file', type=str, default='./res_logs/mmlu_wrong_samples.jsonl',
                         help="JSONL file to save wrong MMLU samples with generated graph and outputs")
+    parser.add_argument('--feed_previous_edge_features_to_node', action='store_true',
+                        help="Feed generated previous-edge features into node generation during inference")
 
     return parser.parse_args()
 
@@ -189,7 +191,8 @@ async def evaluate(
                 model,
                 task_embedding,
                 role_constraints_dict,
-                question_id=question_id
+                question_id=question_id,
+                feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
             )
             generated_graphs.append(generated_graph[0])
             total_nodes += generated_graph[0].number_of_nodes()

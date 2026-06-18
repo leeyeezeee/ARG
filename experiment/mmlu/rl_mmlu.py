@@ -42,7 +42,7 @@ DEFAULT_JUDGE_MAX_CONCURRENCY = 16
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Edge-level RL stage for ARGDesigner on MMLU."
+        description="Alternating node- and edge-level RL stage for ARGDesigner on MMLU."
     )
     parser.add_argument("--model_path", type=str, required=True,
                         help="Directory containing best_model.pth or ef_best_model.pth.")
@@ -62,6 +62,18 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--edge_epsilon", type=float, default=0.15,
                         help="Mix edge probabilities with 0.5 for exploration.")
+    parser.add_argument("--node_epsilon", type=float, default=0.15,
+                        help="Mix node probabilities with a uniform distribution for exploration.")
+    parser.add_argument("--edge_phase_iterations", type=int, default=5,
+                        help="Number of consecutive edge-policy iterations in each alternating cycle.")
+    parser.add_argument("--node_phase_iterations", type=int, default=1,
+                        help="Number of consecutive node-policy iterations in each alternating cycle.")
+    parser.add_argument("--node_lr", type=float, default=None,
+                        help="Node-policy learning rate. Defaults to 0.1 * --lr.")
+    parser.add_argument("--node_reward_beta", type=float, default=0.7,
+                        help="Weight of outgoing entropy gain relative to node stability.")
+    parser.add_argument("--node_effectiveness_coef", type=float, default=0.5,
+                        help="Weight of node effectiveness, defined as one minus redundancy.")
     parser.add_argument("--entropy_coef", type=float, default=1e-3,
                         help="Entropy bonus for candidate edge decisions.")
     parser.add_argument("--semantic_lambda", type=float, default=1.0,
@@ -79,7 +91,7 @@ def parse_args():
     parser.add_argument("--nonpositive_edge_penalty", type=float, default=0.01,
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
     parser.add_argument("--train_node_context", action="store_true",
-                        help="Allow edge loss gradients into node context layers at the same LR.")
+                        help="Deprecated compatibility option; node updates are controlled by alternating phases.")
     parser.add_argument("--feed_previous_edge_features_to_node", action="store_true",
                         help="Feed sampled previous edge features into subsequent node generation during RL rollout.")
     parser.add_argument("--save_every", type=int, default=5,
@@ -399,6 +411,14 @@ def bernoulli_kl(current_prob: torch.Tensor, ref_prob: torch.Tensor) -> torch.Te
     return kl
 
 
+def categorical_kl(current_probs: torch.Tensor, ref_probs: torch.Tensor) -> torch.Tensor:
+    p = current_probs.clamp_min(PROB_EPS)
+    q = ref_probs.detach().clamp_min(PROB_EPS)
+    p = p / p.sum(dim=-1, keepdim=True)
+    q = q / q.sum(dim=-1, keepdim=True)
+    return torch.sum(p * (p.log() - q.log()), dim=-1)
+
+
 async def edge_entropy_rewards(
     graph,
     question: str,
@@ -534,6 +554,153 @@ def wrong_answer_edge_losses(
     ]
 
 
+async def node_semantic_rewards(
+    graph: TestGraph,
+    edge_rewards: Dict[str, float],
+    question: str,
+    judge: SemanticEntailmentJudge,
+    sentence_model: SentenceTransformer,
+    num_entropy_samples: int,
+    beta: float,
+    effectiveness_coef: float,
+) -> Tuple[List[float], List[Dict[str, float]]]:
+    nodes = list(graph.nodes.values())
+    max_entropy = math.log(max(2, int(num_entropy_samples)))
+    output_texts = [
+        str(node.outputs[-1]) if getattr(node, "outputs", None) else ""
+        for node in nodes
+    ]
+    output_embeddings = np.asarray(sentence_model.encode(output_texts), dtype=np.float32)
+    norms = np.linalg.norm(output_embeddings, axis=1, keepdims=True)
+    output_embeddings = output_embeddings / np.clip(norms, EPS, None)
+
+    outgoing_rewards: Dict[str, List[float]] = {node.id: [] for node in nodes}
+    for edge_info in getattr(graph, "edge_log_probs", []):
+        reward = edge_rewards.get(edge_key(edge_info))
+        if reward is not None and edge_info["source"] in outgoing_rewards:
+            outgoing_rewards[edge_info["source"]].append(float(reward))
+
+    rewards = []
+    details = []
+    for idx, node in enumerate(nodes):
+        round_entropies = []
+        for history_item in getattr(node, "execution_history", []):
+            samples = history_item.get("entropy_samples", [])
+            if samples:
+                entropy, _ = await semantic_uncertainty(question, samples, judge)
+                round_entropies.append(float(entropy))
+        node_entropy = (
+            sum(round_entropies) / len(round_entropies)
+            if round_entropies else max_entropy
+        )
+        contribution_values = outgoing_rewards.get(node.id, [])
+        contribution = (
+            sum(contribution_values) / len(contribution_values)
+            if contribution_values else 0.0
+        )
+        if idx == 0:
+            redundancy = 0.0
+        else:
+            similarities = output_embeddings[:idx] @ output_embeddings[idx]
+            redundancy = float(np.clip((float(similarities.max()) + 1.0) / 2.0, 0.0, 1.0))
+        effectiveness = 1.0 - redundancy
+        stability = max_entropy - node_entropy
+        reward = (
+            float(beta) * contribution
+            + (1.0 - float(beta)) * stability
+            + float(effectiveness_coef) * effectiveness
+        )
+        rewards.append(reward)
+        details.append({
+            "contribution": contribution,
+            "entropy": node_entropy,
+            "stability": stability,
+            "redundancy": redundancy,
+            "effectiveness": effectiveness,
+            "reward": reward,
+        })
+    return rewards, details
+
+
+def node_policy_loss(
+    node_log_probs: List[torch.Tensor],
+    node_rewards: List[float],
+) -> torch.Tensor:
+    count = min(len(node_log_probs), len(node_rewards))
+    if count <= 0:
+        device = node_log_probs[0].device if node_log_probs else torch.device("cpu")
+        return torch.tensor(0.0, device=device)
+    rewards = torch.tensor(
+        node_rewards[:count],
+        device=node_log_probs[0].device,
+        dtype=node_log_probs[0].dtype,
+    )
+    advantages = rewards - rewards.mean()
+    log_probs = torch.stack(node_log_probs[:count])
+    return -(log_probs * advantages.detach()).mean()
+
+
+def alternating_phase(iteration: int, edge_iterations: int, node_iterations: int) -> str:
+    edge_iterations = max(0, int(edge_iterations))
+    node_iterations = max(0, int(node_iterations))
+    cycle = edge_iterations + node_iterations
+    if cycle <= 0:
+        raise ValueError("At least one of edge_phase_iterations or node_phase_iterations must be positive.")
+    return "edge" if iteration % cycle < edge_iterations else "node"
+
+
+def validate_alternating_rl_args(args):
+    if not 0.0 <= float(args.node_epsilon) <= 1.0:
+        raise ValueError("node_epsilon must be in [0, 1].")
+    if not 0.0 <= float(args.node_reward_beta) <= 1.0:
+        raise ValueError("node_reward_beta must be in [0, 1].")
+    if float(args.node_effectiveness_coef) < 0:
+        raise ValueError("node_effectiveness_coef must be nonnegative.")
+    if args.node_lr is not None and float(args.node_lr) <= 0:
+        raise ValueError("node_lr must be positive.")
+    alternating_phase(0, args.edge_phase_iterations, args.node_phase_iterations)
+
+
+def _module_parameters(modules: List[torch.nn.Module]) -> List[torch.nn.Parameter]:
+    params = []
+    seen = set()
+    for module in modules:
+        for param in module.parameters():
+            if id(param) not in seen:
+                seen.add(id(param))
+                params.append(param)
+    return params
+
+
+def node_policy_parameters(model) -> List[torch.nn.Parameter]:
+    return _module_parameters([
+        model.task_processor,
+        model.prev_nodes_aggregator,
+        model.node_project,
+        model.node_gru,
+        model.output_node,
+        model.role_processor,
+    ])
+
+
+def edge_policy_parameters(model) -> List[torch.nn.Parameter]:
+    return _module_parameters([
+        model.edge_project,
+        model.edge_gru,
+        model.output_edge,
+        model.embedding_node_to_edge,
+    ])
+
+
+def set_policy_training_phase(model, phase: str):
+    for param in model.parameters():
+        param.requires_grad = False
+    params = node_policy_parameters(model) if phase == "node" else edge_policy_parameters(model)
+    for param in params:
+        param.requires_grad = True
+    return params
+
+
 def configure_trainable_parameters(model, train_node_context: bool):
     for param in model.parameters():
         param.requires_grad = False
@@ -580,6 +747,7 @@ def sample_graph_with_edge_trace(
     task_embedding: torch.Tensor,
     role_constraints: Dict[str, str],
     edge_epsilon: float,
+    node_epsilon: float,
     train_node_context: bool,
     ref_model=None,
     feed_previous_edge_features_to_node: bool = False,
@@ -635,6 +803,12 @@ def sample_graph_with_edge_trace(
             ref_processed_role_embeddings[role] = torch.as_tensor(
                 emb, device=ref_device, dtype=torch.float32
             ).view(-1)
+        ref_end_embedding = ref_model.full_embedding_matrix[ref_model.END_TOKEN].unsqueeze(0)
+        ref_candidate_embs = torch.cat(
+            [ref_model.full_embedding_matrix[role_ids], ref_end_embedding], dim=0
+        )
+        with torch.no_grad():
+            ref_proc_cand = ref_model.role_processor(ref_candidate_embs)
         ref_h_node = torch.zeros(
             1,
             1,
@@ -657,6 +831,9 @@ def sample_graph_with_edge_trace(
     edge_log_probs: List[Dict[str, Any]] = []
     edge_entropies: List[torch.Tensor] = []
     edge_kls: List[torch.Tensor] = []
+    node_log_probs: List[torch.Tensor] = []
+    node_entropies: List[torch.Tensor] = []
+    node_kls: List[torch.Tensor] = []
     previous_edge_features = torch.zeros(
         model.num_nodes_to_consider * model.len_edge_vec,
         device=device,
@@ -708,13 +885,32 @@ def sample_graph_with_edge_trace(
         pred_node_emb = model.output_node(active_out)
         scores = torch.matmul(pred_node_emb.squeeze(1), proc_cand.t())
         probs = F.softmax(scores, dim=-1)
+        valid_mask = torch.ones_like(probs)
         if i < min_num_nodes:
             probs[:, end_idx] = 0
+            valid_mask[:, end_idx] = 0
         probs = probs / (probs.sum(dim=1, keepdim=True) + EPS)
-
-        node_choice = torch.multinomial(probs, 1).item()
+        uniform_probs = valid_mask / valid_mask.sum(dim=1, keepdim=True)
+        sample_probs = (1 - node_epsilon) * probs + node_epsilon * uniform_probs
+        sample_probs = sample_probs / sample_probs.sum(dim=1, keepdim=True)
+        node_dist = torch.distributions.Categorical(probs=sample_probs)
+        node_choice_tensor = node_dist.sample()
+        node_choice = int(node_choice_tensor.item())
         if node_choice == end_idx:
             break
+        node_log_probs.append(node_dist.log_prob(node_choice_tensor).view(()))
+        node_entropies.append(node_dist.entropy().view(()))
+        if use_ref_model:
+            with torch.no_grad():
+                ref_pred_node_emb = ref_model.output_node(ref_active_out)
+                ref_scores = torch.matmul(
+                    ref_pred_node_emb.squeeze(1), ref_proc_cand.t()
+                )
+                ref_probs = F.softmax(ref_scores, dim=-1)
+                if i < min_num_nodes:
+                    ref_probs[:, end_idx] = 0
+                ref_probs = ref_probs / (ref_probs.sum(dim=1, keepdim=True) + EPS)
+            node_kls.append(categorical_kl(probs, ref_probs.to(device)).view(()))
 
         role_id = role_ids[node_choice]
         role = model.id_to_role.get(role_id, roles[node_choice])
@@ -861,6 +1057,9 @@ def sample_graph_with_edge_trace(
     graph.graph["mode"] = "ARGDesignerEdgeRL"
     graph.graph["roles"] = generated_roles
     trace = {
+        "node_log_probs": node_log_probs,
+        "node_entropies": node_entropies,
+        "node_kls": node_kls,
         "edge_log_probs": edge_log_probs,
         "edge_entropies": edge_entropies,
         "edge_kls": edge_kls,
@@ -1063,6 +1262,7 @@ async def evaluate_current_generator(
                 task_embedding,
                 role_constraints,
                 edge_epsilon=args.eval_edge_epsilon,
+                node_epsilon=0.0,
                 train_node_context=False,
                 feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
             )
@@ -1099,6 +1299,7 @@ async def evaluate_current_generator(
 
 
 async def train_rl(args):
+    validate_alternating_rl_args(args)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -1113,8 +1314,11 @@ async def train_rl(args):
         ref_model.eval()
         for param in ref_model.parameters():
             param.requires_grad = False
-    trainable_params = configure_trainable_parameters(model, args.train_node_context)
-    optimizer = torch.optim.AdamW(trainable_params, lr=args.lr)
+    edge_params = edge_policy_parameters(model)
+    node_params = node_policy_parameters(model)
+    edge_optimizer = torch.optim.AdamW(edge_params, lr=args.lr)
+    node_lr = args.node_lr if args.node_lr is not None else args.lr * 0.1
+    node_optimizer = torch.optim.AdamW(node_params, lr=node_lr)
 
     sentence_model = SentenceTransformer(args.embedding_model)
     dataset = MMLUDataset("dev")
@@ -1140,6 +1344,13 @@ async def train_rl(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     for iteration in range(args.num_iterations):
+        phase = alternating_phase(
+            iteration,
+            args.edge_phase_iterations,
+            args.node_phase_iterations,
+        )
+        trainable_params = set_policy_training_phase(model, phase)
+        optimizer = edge_optimizer if phase == "edge" else node_optimizer
         start_ts = time.time()
         losses: List[torch.Tensor] = []
         correctness_values = []
@@ -1147,6 +1358,7 @@ async def train_rl(args):
         reward_summaries = []
         answers = []
         kl_values = []
+        node_reward_values = []
 
         records = [next(loader) for _ in range(args.batch_size)]
         samples_per_prompt = max(1, int(args.samples_per_prompt))
@@ -1166,7 +1378,8 @@ async def train_rl(args):
                     task_embedding,
                     role_constraints,
                     edge_epsilon=args.edge_epsilon,
-                    train_node_context=args.train_node_context,
+                    node_epsilon=args.node_epsilon,
+                    train_node_context=False,
                     ref_model=ref_model,
                     feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
                 )
@@ -1202,7 +1415,7 @@ async def train_rl(args):
 
                 edge_rewards: Dict[str, float] = {}
                 edge_details: Dict[str, Dict[str, Any]] = {}
-                if is_correct:
+                if phase == "node" or is_correct:
                     edge_rewards, edge_details = await edge_entropy_rewards(
                         test_graph,
                         task_text,
@@ -1214,29 +1427,53 @@ async def train_rl(args):
                     )
 
                 sample_loss = torch.tensor(0.0, device=model.args.device)
-                if is_correct:
-                    edge_losses = edge_semantic_losses(
-                        test_graph.edge_log_probs,
-                        edge_rewards,
-                        semantic_lambda=args.semantic_lambda,
-                        sparsity_penalty=args.sparsity_penalty,
-                        correctness_reward=correctness,
-                        edge_reward_clip=args.edge_reward_clip,
-                    )
-                    if edge_losses:
-                        sample_loss = torch.stack(edge_losses).sum()
-                else:
-                    edge_losses = wrong_answer_edge_losses(test_graph.edge_log_probs)
-                    if edge_losses:
-                        sample_loss = torch.stack(edge_losses).mean()
+                node_rewards = []
+                node_details = []
+                if phase == "edge":
+                    if is_correct:
+                        edge_losses = edge_semantic_losses(
+                            test_graph.edge_log_probs,
+                            edge_rewards,
+                            semantic_lambda=args.semantic_lambda,
+                            sparsity_penalty=args.sparsity_penalty,
+                            correctness_reward=correctness,
+                            edge_reward_clip=args.edge_reward_clip,
+                        )
+                        if edge_losses:
+                            sample_loss = torch.stack(edge_losses).sum()
+                    else:
+                        edge_losses = wrong_answer_edge_losses(test_graph.edge_log_probs)
+                        if edge_losses:
+                            sample_loss = torch.stack(edge_losses).mean()
 
-                if is_correct:
-                    if trace["edge_entropies"]:
+                    if is_correct and trace["edge_entropies"]:
                         entropy_bonus = torch.stack(trace["edge_entropies"]).mean()
                         sample_loss = sample_loss - args.entropy_coef * entropy_bonus
-
-                    if args.kl_coef > 0 and trace.get("edge_kls"):
+                    if is_correct and args.kl_coef > 0 and trace.get("edge_kls"):
                         kl_loss = torch.stack(trace["edge_kls"]).mean()
+                        sample_loss = sample_loss + args.kl_coef * kl_loss
+                        kl_values.append(float(kl_loss.detach().cpu()))
+                else:
+                    node_rewards, node_details = await node_semantic_rewards(
+                        test_graph,
+                        edge_rewards,
+                        task_text,
+                        judge,
+                        sentence_model,
+                        num_entropy_samples,
+                        beta=args.node_reward_beta,
+                        effectiveness_coef=args.node_effectiveness_coef,
+                    )
+                    sample_loss = node_policy_loss(
+                        trace["node_log_probs"],
+                        node_rewards,
+                    )
+                    node_reward_values.extend(node_rewards)
+                    if trace["node_entropies"]:
+                        entropy_bonus = torch.stack(trace["node_entropies"]).mean()
+                        sample_loss = sample_loss - args.entropy_coef * entropy_bonus
+                    if args.kl_coef > 0 and trace.get("node_kls"):
+                        kl_loss = torch.stack(trace["node_kls"]).mean()
                         sample_loss = sample_loss + args.kl_coef * kl_loss
                         kl_values.append(float(kl_loss.detach().cpu()))
 
@@ -1253,6 +1490,8 @@ async def train_rl(args):
                         args.edge_reward_clip,
                     ),
                     "edge_details": edge_details,
+                    "node_rewards": node_rewards,
+                    "node_details": node_details,
                     "num_edges": generated_graph.number_of_edges(),
                 })
         if losses:
@@ -1270,10 +1509,12 @@ async def train_rl(args):
         metric = {
             "timestamp": datetime.datetime.now().isoformat(),
             "iteration": iteration + 1,
+            "phase": phase,
             "loss": loss_value,
             "correct_rate": correct_rate,
             "avg_edges": avg_edges,
             "avg_kl": sum(kl_values) / max(1, len(kl_values)),
+            "avg_node_reward": sum(node_reward_values) / max(1, len(node_reward_values)),
             "samples_per_prompt": samples_per_prompt,
             "answers": answers,
             "reward_summaries": reward_summaries,
@@ -1286,7 +1527,7 @@ async def train_rl(args):
             file.write(json.dumps(metric, ensure_ascii=False, default=str) + "\n")
 
         print(
-            f"Iter {iteration + 1}/{args.num_iterations}: "
+            f"Iter {iteration + 1}/{args.num_iterations} [{phase}]: "
             f"loss={loss_value:.4f} correct_rate={correct_rate:.3f} "
             f"avg_edges={avg_edges:.2f} "
             f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "

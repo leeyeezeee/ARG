@@ -33,6 +33,8 @@ def parse_args():
     parser.add_argument('--summary_log_file', type=str, default='./res_logs/evaluation_summary.jsonl')
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--eval_batch_size', type=int, default=10)
+    parser.add_argument('--feed_previous_edge_features_to_node', action='store_true',
+                        help="Feed generated previous-edge features into node generation during inference")
     return parser.parse_args()
 
 
@@ -108,7 +110,13 @@ async def main(ef=True):
             try:
                 task_embedding = torch.tensor(sentence_model.encode(task_text),
                                               device=simple_ar_model.args.device).float()
-                generated_graphs = generate_graph(simple_ar_model, task_embedding, role_constraints_dict, global_idx)
+                generated_graphs = generate_graph(
+                    simple_ar_model,
+                    task_embedding,
+                    role_constraints_dict,
+                    global_idx,
+                    feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
+                )
 
                 if not generated_graphs:
                     raise RuntimeError("Graph generation failed.")

@@ -565,7 +565,21 @@ class ARGDesigner(nn.Module):
         log_probs = -swapped_loss
         return log_probs, role_accuracy
 
-    def sample(self, num_samples=10, batch_size=1, task_embedding=None, question_id=None, vis=False):
+    def sample(
+            self,
+            num_samples=10,
+            batch_size=1,
+            task_embedding=None,
+            question_id=None,
+            vis=False,
+            feed_previous_edge_features_to_node=None,
+    ):
+        if feed_previous_edge_features_to_node is None:
+            feed_previous_edge_features_to_node = getattr(
+                self.args,
+                "feed_previous_edge_features_to_node",
+                False,
+            )
         role_embeddings_dict_full = self.precomputed_embeddings
         all_roles = list(role_embeddings_dict_full.keys())
         selected_roles_names = all_roles[:]
@@ -635,7 +649,8 @@ class ARGDesigner(nn.Module):
                         current_node_input[:, 0, :self.embedding_dim] = t_proc
                     current_node_input[:, 0, self.embedding_dim + self.len_edge_vec - 2] = 1
                 else:
-                    current_node_input[:, 0, self.embedding_dim:] = previous_edge_features
+                    if feed_previous_edge_features_to_node:
+                        current_node_input[:, 0, self.embedding_dim:] = previous_edge_features
                     for b in range(batch_size):
                         prev_embs = torch.stack(node_embeddings[b], dim=0)
                         _, h_agg = self.prev_nodes_aggregator(prev_embs.unsqueeze(0))

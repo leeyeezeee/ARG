@@ -126,14 +126,23 @@ def load_model(model_dir, ef=False):
     return model
 
 
-def generate_graph(model, task_embedding, role_constraints_dict, question_id=None):
+def generate_graph(
+        model,
+        task_embedding,
+        role_constraints_dict,
+        question_id=None,
+        feed_previous_edge_features_to_node=None,
+):
     """
     Generate a graph structure for the given task embedding.
     """
     with torch.no_grad():
         generated = model.sample(num_samples=1, batch_size=1,
                                  task_embedding=task_embedding,
-                                 question_id=question_id, vis=True)
+                                 question_id=question_id, vis=True,
+                                 feed_previous_edge_features_to_node=(
+                                     feed_previous_edge_features_to_node
+                                 ))
     results = []
     for g in generated:
         for n in g.nodes():

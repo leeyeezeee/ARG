@@ -42,6 +42,8 @@ class Args:
                                  help='whether to use clip gradient for generation model')
         self.parser.add_argument('--role_mapping_path', type=str, default=None,
                         help='Path to predefined role mapping file, if provided will load role mapping from here')
+        self.parser.add_argument('--feed_previous_edge_features_to_node', action='store_true',
+                        help='Feed generated previous-edge features into node generation during inference')
 
     def update_args_from_dict(self, args_dict):
         """

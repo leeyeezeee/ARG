@@ -16,14 +16,20 @@ from sentence_transformers import SentenceTransformer
 from experiment.mmlu.rl_mmlu import (
     RL_FINAL_CHECKPOINT,
     SemanticEntailmentJudge,
+    alternating_phase,
     attach_edge_trace_to_test_graph,
-    configure_trainable_parameters,
+    edge_policy_parameters,
     edge_entropy_rewards,
     edge_semantic_losses,
     execute_graph_with_history,
+    node_policy_loss,
+    node_policy_parameters,
+    node_semantic_rewards,
     sample_graph_with_edge_trace,
     save_rl_checkpoint,
     scale_edge_rewards,
+    set_policy_training_phase,
+    validate_alternating_rl_args,
     wrong_answer_edge_losses,
 )
 from experiment.utils import convert_to_pyg_graph, load_model
@@ -48,7 +54,7 @@ class RLDatasetSpec:
 
 def build_parser(spec: RLDatasetSpec):
     parser = argparse.ArgumentParser(
-        description=f"Edge-level semantic entropy RL stage for ARGDesigner on {spec.name}."
+        description=f"Alternating node- and edge-level semantic entropy RL stage for ARGDesigner on {spec.name}."
     )
     parser.add_argument("--model_path", type=str, required=True,
                         help="Directory containing best_model.pth or ef_best_model.pth.")
@@ -72,6 +78,18 @@ def build_parser(spec: RLDatasetSpec):
     parser.add_argument("--limit_questions", type=int, default=None)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--edge_epsilon", type=float, default=0.15)
+    parser.add_argument("--node_epsilon", type=float, default=0.15,
+                        help="Mix node probabilities with a uniform distribution for exploration.")
+    parser.add_argument("--edge_phase_iterations", type=int, default=5,
+                        help="Number of consecutive edge-policy iterations in each alternating cycle.")
+    parser.add_argument("--node_phase_iterations", type=int, default=1,
+                        help="Number of consecutive node-policy iterations in each alternating cycle.")
+    parser.add_argument("--node_lr", type=float, default=None,
+                        help="Node-policy learning rate. Defaults to 0.1 * --lr.")
+    parser.add_argument("--node_reward_beta", type=float, default=0.7,
+                        help="Weight of outgoing entropy gain relative to node stability.")
+    parser.add_argument("--node_effectiveness_coef", type=float, default=0.5,
+                        help="Weight of node effectiveness, defined as one minus redundancy.")
     parser.add_argument("--entropy_coef", type=float, default=1e-3)
     parser.add_argument("--semantic_lambda", type=float, default=1.0)
     parser.add_argument("--sparsity_penalty", type=float, default=0.0,
@@ -85,7 +103,8 @@ def build_parser(spec: RLDatasetSpec):
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
     parser.add_argument("--nonpositive_edge_penalty", type=float, default=0.01,
                         help="Deprecated compatibility option; raw signed entropy gain is used.")
-    parser.add_argument("--train_node_context", action="store_true")
+    parser.add_argument("--train_node_context", action="store_true",
+                        help="Deprecated compatibility option; node updates are controlled by alternating phases.")
     parser.add_argument("--feed_previous_edge_features_to_node", action="store_true",
                         help="Feed sampled previous edge features into subsequent node generation during RL rollout.")
     parser.add_argument("--save_every", type=int, default=5,
@@ -136,6 +155,7 @@ async def run_one_sample(
     record,
     judge: Optional[SemanticEntailmentJudge],
     train_mode: bool,
+    phase: str = "edge",
     ref_model=None,
 ):
     task_text = spec.task_text(record)
@@ -149,7 +169,8 @@ async def run_one_sample(
         task_embedding,
         spec.role_constraints,
         edge_epsilon=args.edge_epsilon if train_mode else args.eval_edge_epsilon,
-        train_node_context=args.train_node_context if train_mode else False,
+        node_epsilon=args.node_epsilon if train_mode else 0.0,
+        train_node_context=False,
         ref_model=ref_model if train_mode else None,
         feed_previous_edge_features_to_node=args.feed_previous_edge_features_to_node,
     )
@@ -176,7 +197,7 @@ async def run_one_sample(
     is_correct = spec.is_correct(raw_answer, record)
     edge_rewards: Dict[str, float] = {}
     edge_details: Dict[str, Dict[str, Any]] = {}
-    if train_mode and is_correct and judge is not None:
+    if train_mode and judge is not None and (phase == "node" or is_correct):
         edge_rewards, edge_details = await edge_entropy_rewards(
             test_graph,
             task_text,
@@ -189,28 +210,49 @@ async def run_one_sample(
 
     loss = torch.tensor(0.0, device=model.args.device)
     kl_value = 0.0
-    if train_mode and is_correct:
-        edge_losses = edge_semantic_losses(
-            test_graph.edge_log_probs,
-            edge_rewards,
-            semantic_lambda=args.semantic_lambda,
-            sparsity_penalty=args.sparsity_penalty,
-            correctness_reward=1.0 if is_correct else 0.0,
-            edge_reward_clip=args.edge_reward_clip,
-        )
-        if edge_losses:
-            loss = torch.stack(edge_losses).sum()
-    elif train_mode:
-        edge_losses = wrong_answer_edge_losses(test_graph.edge_log_probs)
-        if edge_losses:
-            loss = torch.stack(edge_losses).mean()
+    node_rewards = []
+    node_details = []
+    if train_mode and phase == "edge":
+        if is_correct:
+            edge_losses = edge_semantic_losses(
+                test_graph.edge_log_probs,
+                edge_rewards,
+                semantic_lambda=args.semantic_lambda,
+                sparsity_penalty=args.sparsity_penalty,
+                correctness_reward=1.0,
+                edge_reward_clip=args.edge_reward_clip,
+            )
+            if edge_losses:
+                loss = torch.stack(edge_losses).sum()
+        else:
+            edge_losses = wrong_answer_edge_losses(test_graph.edge_log_probs)
+            if edge_losses:
+                loss = torch.stack(edge_losses).mean()
 
-    if train_mode and is_correct:
-        if trace["edge_entropies"]:
+        if is_correct and trace["edge_entropies"]:
             entropy_bonus = torch.stack(trace["edge_entropies"]).mean()
             loss = loss - args.entropy_coef * entropy_bonus
-        if args.kl_coef > 0 and trace.get("edge_kls"):
+        if is_correct and args.kl_coef > 0 and trace.get("edge_kls"):
             kl_loss = torch.stack(trace["edge_kls"]).mean()
+            loss = loss + args.kl_coef * kl_loss
+            kl_value = float(kl_loss.detach().cpu())
+    elif train_mode and phase == "node" and judge is not None:
+        node_rewards, node_details = await node_semantic_rewards(
+            test_graph,
+            edge_rewards,
+            task_text,
+            judge,
+            sentence_model,
+            max(2, int(args.num_entropy_samples)),
+            beta=args.node_reward_beta,
+            effectiveness_coef=args.node_effectiveness_coef,
+        )
+        loss = node_policy_loss(trace["node_log_probs"], node_rewards)
+        if trace["node_entropies"]:
+            entropy_bonus = torch.stack(trace["node_entropies"]).mean()
+            loss = loss - args.entropy_coef * entropy_bonus
+        if args.kl_coef > 0 and trace.get("node_kls"):
+            kl_loss = torch.stack(trace["node_kls"]).mean()
             loss = loss + args.kl_coef * kl_loss
             kl_value = float(kl_loss.detach().cpu())
 
@@ -222,6 +264,8 @@ async def run_one_sample(
         "edge_rewards": edge_rewards,
         "scaled_edge_rewards": scale_edge_rewards(edge_rewards, args.edge_reward_clip),
         "edge_details": edge_details,
+        "node_rewards": node_rewards,
+        "node_details": node_details,
         "kl_value": kl_value,
     }
 
@@ -267,6 +311,7 @@ async def evaluate_current_generator(model, sentence_model, spec: RLDatasetSpec,
 
 
 async def train_edge_rl(spec: RLDatasetSpec, args):
+    validate_alternating_rl_args(args)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -281,8 +326,11 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
         ref_model.eval()
         for param in ref_model.parameters():
             param.requires_grad = False
-    trainable_params = configure_trainable_parameters(model, args.train_node_context)
-    optimizer = torch.optim.AdamW(trainable_params, lr=args.lr)
+    edge_params = edge_policy_parameters(model)
+    node_params = node_policy_parameters(model)
+    edge_optimizer = torch.optim.AdamW(edge_params, lr=args.lr)
+    node_lr = args.node_lr if args.node_lr is not None else args.lr * 0.1
+    node_optimizer = torch.optim.AdamW(node_params, lr=node_lr)
     sentence_model = SentenceTransformer(args.embedding_model)
 
     train_records = spec.load_train_records(args)
@@ -306,12 +354,20 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
     metrics_path = os.path.join(args.output_dir, "rl_metrics.jsonl")
 
     for iteration in range(args.num_iterations):
+        phase = alternating_phase(
+            iteration,
+            args.edge_phase_iterations,
+            args.node_phase_iterations,
+        )
+        trainable_params = set_policy_training_phase(model, phase)
+        optimizer = edge_optimizer if phase == "edge" else node_optimizer
         start_ts = time.time()
         losses = []
         correctness = []
         edge_counts = []
         reward_summaries = []
         kl_values = []
+        node_reward_values = []
 
         records = [next(loader) for _ in range(args.batch_size)]
         samples_per_prompt = max(1, int(args.samples_per_prompt))
@@ -327,6 +383,7 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
                         record,
                         judge=judge,
                         train_mode=True,
+                        phase=phase,
                         ref_model=ref_model,
                     )
                 except Exception:
@@ -338,6 +395,7 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
                 edge_counts.append(result["num_edges"])
                 if result["kl_value"] > 0:
                     kl_values.append(result["kl_value"])
+                node_reward_values.extend(result["node_rewards"])
                 reward_summaries.append({
                     "task": task_text,
                     "sample_idx": sample_idx,
@@ -346,6 +404,8 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
                     "edge_rewards": result["edge_rewards"],
                     "scaled_edge_rewards": result["scaled_edge_rewards"],
                     "edge_details": result["edge_details"],
+                    "node_rewards": result["node_rewards"],
+                    "node_details": result["node_details"],
                 })
         if losses:
             total_loss = torch.stack(losses).mean()
@@ -363,10 +423,12 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
             "timestamp": datetime.datetime.now().isoformat(),
             "dataset": spec.name,
             "iteration": iteration + 1,
+            "phase": phase,
             "loss": loss_value,
             "correct_rate": correct_rate,
             "avg_edges": avg_edges,
             "avg_kl": sum(kl_values) / max(1, len(kl_values)),
+            "avg_node_reward": sum(node_reward_values) / max(1, len(node_reward_values)),
             "samples_per_prompt": samples_per_prompt,
             "reward_summaries": reward_summaries,
             "cost": Cost.instance().value,
@@ -378,7 +440,7 @@ async def train_edge_rl(spec: RLDatasetSpec, args):
             file.write(json.dumps(metric, ensure_ascii=False, default=str) + "\n")
 
         print(
-            f"{spec.name} Iter {iteration + 1}/{args.num_iterations}: "
+            f"{spec.name} Iter {iteration + 1}/{args.num_iterations} [{phase}]: "
             f"loss={loss_value:.4f} correct_rate={correct_rate:.3f} "
             f"avg_edges={avg_edges:.2f} "
             f"avg_kl={sum(kl_values) / max(1, len(kl_values)):.6f} "
